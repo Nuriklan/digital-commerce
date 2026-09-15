@@ -57,6 +57,7 @@ func (o *Order) AddItem(product Product, quantity int) {
 	for i, item := range o.Items {
 		if item.ProductID == product.ID {
 			o.Items[i].Quantity += quantity
+			return
 		}
 	}
 
