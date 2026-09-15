@@ -1,65 +1,56 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/Nuriklan/digital-commerce/internal/domain"
+	"github.com/Nuriklan/digital-commerce/internal/worker"
 )
 
 func main() {
-	// Create user
+	// graceful shutdown: catching SIGINT / SIGTERM
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// creating worker pool: 3 goroutines, buffer 10
+	pool := worker.NewPool(3, 10, worker.HandleOrderCreated)
+	pool.Start(ctx)
+
+	// --- domain logic ---
 	user, err := domain.NewUser("Alice", "alice@example.com")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Create products
 	game, err := domain.NewProduct("Cyberpunk 2077", 29.99)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	dlc, err := domain.NewProduct("DLC Pack", 9.99)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Create order
 	order := domain.NewOrder(user.ID)
-
-	// Add items
 	order.AddItem(game, 1)
-	order.AddItem(dlc, 2)
-
-	fmt.Printf("Order total: %.2f\n", order.CalculateTotal())
-
-	// Remove DLC
-	if err := order.RemoveItem(dlc.ID); err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("Order total after remove: %.2f\n", order.CalculateTotal())
-
-	// Payment
-	payment, err := domain.NewPayment(order.ID, order.CalculateTotal())
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	if err := order.Pay(); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := payment.MarkSuccess(); err != nil {
-		log.Fatal(err)
+	fmt.Printf("Order %s created, status: %s\n\n", order.ID, order.Status)
+
+	// --- sending background tasks ---
+	jobs := []string{"send_notification", "update_analytics", "create_delivery"}
+	for _, name := range jobs {
+		ok := pool.Submit(ctx, worker.Job{Name: name, Payload: order})
+		if !ok {
+			log.Printf("failed to submit job %q: context cancelled", name)
+		}
 	}
 
-	fmt.Printf("Order status: %s\n", order.Status)
-	fmt.Printf("Payment status: %s\n", payment.Status)
-
-	// Trying to cancel paid order
-	if err := order.Cancel(); err != nil {
-		fmt.Println("Cancel error:", err)
-	}
+	// waiting workers to end
+	pool.Wait()
+	fmt.Println("\ndone.")
 }
