@@ -9,24 +9,48 @@ import (
 
 	"github.com/Nuriklan/digital-commerce/internal/domain"
 	"github.com/Nuriklan/digital-commerce/internal/handler"
-	"github.com/Nuriklan/digital-commerce/internal/storage"
+	"github.com/Nuriklan/digital-commerce/internal/repository"
+	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/google/uuid"
 )
 
-func setupRouter() (http.Handler, *storage.MemoryStorage) {
-	store := storage.NewMemoryStorage()
+type testContext struct {
+	router      http.Handler
+	userRepo    repository.UserRepository
+	productRepo repository.ProductRepository
+	orderRepo   repository.OrderRepository
+	paymentRepo repository.PaymentRepository
+}
 
-	router := handler.NewRouter(store, nil)
-	return router, store
+func setupTestApp() *testContext {
+	userRepo := repository.NewUserMemoryRepository()
+	productRepo := repository.NewProductMemoryRepository()
+	orderRepo := repository.NewOrderMemoryRepository()
+	paymentRepo := repository.NewPaymentMemoryRepository()
+
+	userSvc := service.NewUserService(userRepo)
+	productSvc := service.NewProductService(productRepo)
+	orderSvc := service.NewOrderService(orderRepo, userRepo, productRepo, nil)
+	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo)
+
+	router := handler.NewRouter(userSvc, productSvc, orderSvc, paymentSvc)
+
+	return &testContext{
+		router:      router,
+		userRepo:    userRepo,
+		productRepo: productRepo,
+		orderRepo:   orderRepo,
+		paymentRepo: paymentRepo,
+	}
 }
 
 func TestHealthCheck(t *testing.T) {
-	router, _ := setupRouter()
+	app := setupTestApp()
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
-	router.ServeHTTP(rec, req)
+	app.router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
@@ -39,7 +63,7 @@ func TestHealthCheck(t *testing.T) {
 }
 
 func TestCreateAndGetUser(t *testing.T) {
-	router, _ := setupRouter()
+	app := setupTestApp()
 
 	// Create the user
 	body := `{"name":"Bob", "email":"bob@example.com"}`
@@ -47,7 +71,7 @@ func TestCreateAndGetUser(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	router.ServeHTTP(rec, req)
+	app.router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected status 201 Created, got %d, body: %s", rec.Code, rec.Body.String())
@@ -66,7 +90,7 @@ func TestCreateAndGetUser(t *testing.T) {
 	getReq := httptest.NewRequest(http.MethodGet, "/users/"+createdUser.ID.String(), nil)
 	getRec := httptest.NewRecorder()
 
-	router.ServeHTTP(getRec, getReq)
+	app.router.ServeHTTP(getRec, getReq)
 
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("expected status 200 OK, got %d", getRec.Code)
@@ -77,7 +101,7 @@ func TestCreateAndGetUser(t *testing.T) {
 	notFoundReq := httptest.NewRequest(http.MethodGet, "/users/"+randomID.String(), nil)
 	notFoundRec := httptest.NewRecorder()
 
-	router.ServeHTTP(notFoundRec, notFoundReq)
+	app.router.ServeHTTP(notFoundRec, notFoundReq)
 
 	if notFoundRec.Code != http.StatusNotFound {
 		t.Fatalf("expected status 404 Not Found, got %d", notFoundRec.Code)
@@ -85,7 +109,7 @@ func TestCreateAndGetUser(t *testing.T) {
 }
 
 func TestCreateUser_ValidationErrors(t *testing.T) {
-	router, _ := setupRouter()
+	app := setupTestApp()
 
 	tests := []struct {
 		name       string
@@ -119,7 +143,7 @@ func TestCreateUser_ValidationErrors(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/users", bytes.NewBufferString(tt.payload))
 			rec := httptest.NewRecorder()
 
-			router.ServeHTTP(rec, req)
+			app.router.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Errorf("got status %d, want %d, body: %s", rec.Code, tt.wantStatus, rec.Body.String())
@@ -129,15 +153,15 @@ func TestCreateUser_ValidationErrors(t *testing.T) {
 }
 
 func TestOrderLifecycle(t *testing.T) {
-	router, store := setupRouter()
+	app := setupTestApp()
 
 	// Подготовим юзера и товар в хранилище
 	user, _ := domain.NewUser("Charlie", "charlie@example.com")
 	product, _ := domain.NewProduct("Steam Deck", 399.99)
-	store.SaveUser(user)
-	store.SaveProduct(product)
+	_ = app.userRepo.Save(user)
+	_ = app.productRepo.Save(product)
 
-	// 1. Создаем заказ через HTTP API
+	// 1. Creating order
 	orderPayload := map[string]any{
 		"user_id": user.ID.String(),
 		"items": []map[string]any{
@@ -148,7 +172,7 @@ func TestOrderLifecycle(t *testing.T) {
 
 	createReq := httptest.NewRequest(http.MethodPost, "/orders", bytes.NewBuffer(bodyBytes))
 	createRec := httptest.NewRecorder()
-	router.ServeHTTP(createRec, createReq)
+	app.router.ServeHTTP(createRec, createReq)
 
 	if createRec.Code != http.StatusCreated {
 		t.Fatalf("expected 201 Created, got %d, body: %s", createRec.Code, createRec.Body.String())
@@ -164,7 +188,7 @@ func TestOrderLifecycle(t *testing.T) {
 	// 2. Отменяем заказ
 	cancelReq := httptest.NewRequest(http.MethodPost, "/orders/"+order.ID.String()+"/cancel", nil)
 	cancelRec := httptest.NewRecorder()
-	router.ServeHTTP(cancelRec, cancelReq)
+	app.router.ServeHTTP(cancelRec, cancelReq)
 
 	if cancelRec.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK on cancel, got %d", cancelRec.Code)
@@ -172,7 +196,7 @@ func TestOrderLifecycle(t *testing.T) {
 
 	// 3. Повторная отмена уже отмененного заказа должна вернуть 400 Bad Request
 	cancelAgainRec := httptest.NewRecorder()
-	router.ServeHTTP(cancelAgainRec, cancelReq)
+	app.router.ServeHTTP(cancelAgainRec, cancelReq)
 
 	if cancelAgainRec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 Bad Request on duplicate cancel, got %d", cancelAgainRec.Code)

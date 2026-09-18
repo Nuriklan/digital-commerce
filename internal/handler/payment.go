@@ -4,10 +4,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Nuriklan/digital-commerce/internal/repository"
+	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/google/uuid"
-
-	"github.com/Nuriklan/digital-commerce/internal/domain"
-	"github.com/Nuriklan/digital-commerce/internal/storage"
 )
 
 type CreatePaymentRequest struct {
@@ -15,11 +14,11 @@ type CreatePaymentRequest struct {
 }
 
 type PaymentHandler struct {
-	storage *storage.MemoryStorage
+	service *service.PaymentService
 }
 
-func NewPaymentHandler(storage *storage.MemoryStorage) *PaymentHandler {
-	return &PaymentHandler{storage: storage}
+func NewPaymentHandler(service *service.PaymentService) *PaymentHandler {
+	return &PaymentHandler{service: service}
 }
 
 func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
@@ -29,29 +28,15 @@ func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.storage.GetOrderByID(req.OrderID)
+	payment, err := h.service.ProcessPayment(req.OrderID)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "order not found")
-		return
-	}
-
-	total := order.CalculateTotal()
-	payment, err := domain.NewPayment(order.ID, total)
-	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	if err := order.Pay(); err != nil {
-		_ = payment.MarkFailed()
-		h.storage.SavePayment(payment)
-		respondError(w, http.StatusBadRequest, "payment failed: "+err.Error())
-		return
-	}
-
-	_ = payment.MarkSuccess()
-	h.storage.SaveOrder(order)
-	h.storage.SavePayment(payment)
 
 	respondJSON(w, http.StatusCreated, payment)
 }
@@ -64,9 +49,9 @@ func (h *PaymentHandler) GetPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payment, err := h.storage.GetPaymentByID(id)
+	payment, err := h.service.GetPayment(id)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, "payment not found")
 			return
 		}

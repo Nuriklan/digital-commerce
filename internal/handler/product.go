@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/Nuriklan/digital-commerce/internal/domain"
-	"github.com/Nuriklan/digital-commerce/internal/storage"
+	"github.com/Nuriklan/digital-commerce/internal/repository"
+	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/google/uuid"
 )
 
@@ -16,11 +16,11 @@ type CreateProductRequest struct {
 }
 
 type ProductHandler struct {
-	storage *storage.MemoryStorage
+	service *service.ProductService
 }
 
-func NewProductHandler(storage *storage.MemoryStorage) *ProductHandler {
-	return &ProductHandler{storage: storage}
+func NewProductHandler(service *service.ProductService) *ProductHandler {
+	return &ProductHandler{service: service}
 }
 
 func (h *ProductHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
@@ -30,13 +30,12 @@ func (h *ProductHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	product, err := domain.NewProduct(req.Name, req.Price)
+	product, err := h.service.CreateProduct(req.Name, req.Price)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	h.storage.SaveProduct(product)
 	respondJSON(w, http.StatusCreated, product)
 }
 
@@ -48,13 +47,13 @@ func (h *ProductHandler) GetProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	product, err := h.storage.GetProductByID(id)
+	product, err := h.service.GetProduct(id)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, "product not found")
 			return
 		}
-		respondError(w, http.StatusNotFound, "failed to get product")
+		respondError(w, http.StatusInternalServerError, "failed to get product")
 		return
 	}
 
@@ -77,7 +76,12 @@ func (h *ProductHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	products := h.storage.ListProducts(limit, offset)
+	products, err := h.service.ListProducts(limit, offset)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to list products")
+		return
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
 		"items":  products,
 		"limit":  limit,

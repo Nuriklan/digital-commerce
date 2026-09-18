@@ -4,11 +4,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Nuriklan/digital-commerce/internal/repository"
+	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/google/uuid"
-
-	"github.com/Nuriklan/digital-commerce/internal/domain"
-	"github.com/Nuriklan/digital-commerce/internal/storage"
-	"github.com/Nuriklan/digital-commerce/internal/worker"
 )
 
 type OrderItemRequest struct {
@@ -22,15 +20,11 @@ type CreateOrderRequest struct {
 }
 
 type OrderHandler struct {
-	storage *storage.MemoryStorage
-	pool    *worker.Pool
+	service *service.OrderService
 }
 
-func NewOrderHandler(storage *storage.MemoryStorage, pool *worker.Pool) *OrderHandler {
-	return &OrderHandler{
-		storage: storage,
-		pool:    pool,
-	}
+func NewOrderHandler(service *service.OrderService) *OrderHandler {
+	return &OrderHandler{service: service}
 }
 
 func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
@@ -40,37 +34,26 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.storage.GetUserByID(req.UserID); err != nil {
-		respondError(w, http.StatusNotFound, "user not found")
+	items := make([]service.CreateOrderItemDTO, len(req.Items))
+	for i, item := range req.Items {
+		items[i] = service.CreateOrderItemDTO{
+			ProductID: item.ProductID,
+			Quantity:  item.Quantity,
+		}
+	}
+
+	order, err := h.service.CreateOrder(r.Context(), req.UserID, items)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrInvalidQuantity) {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
-	}
-
-	order := domain.NewOrder(req.UserID)
-
-	for _, itemReq := range req.Items {
-		if itemReq.Quantity <= 0 {
-			respondError(w, http.StatusBadRequest, "quantity must be greater than 0")
-			return
-		}
-		product, err := h.storage.GetProductByID(itemReq.ProductID)
-		if err != nil {
-			respondError(w, http.StatusNotFound, "product not found: "+itemReq.ProductID.String())
-			return
-		}
-		order.AddItem(product, itemReq.Quantity)
-	}
-
-	h.storage.SaveOrder(order)
-
-	if h.pool != nil {
-		h.pool.Submit(r.Context(), worker.Job{
-			Name:    "send_notification",
-			Payload: order,
-		})
-		h.pool.Submit(r.Context(), worker.Job{
-			Name:    "update_analytics",
-			Payload: order,
-		})
 	}
 
 	respondJSON(w, http.StatusCreated, order)
@@ -84,9 +67,9 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.storage.GetOrderByID(id)
+	order, err := h.service.GetOrder(id)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, "order not found")
 			return
 		}
@@ -105,21 +88,15 @@ func (h *OrderHandler) CancelOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.storage.GetOrderByID(id)
+	order, err := h.service.CancelOrder(id)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, "order not found")
 			return
 		}
-		respondError(w, http.StatusInternalServerError, "failed to get order")
-		return
-	}
-
-	if err := order.Cancel(); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	h.storage.SaveOrder(order)
 	respondJSON(w, http.StatusOK, order)
 }

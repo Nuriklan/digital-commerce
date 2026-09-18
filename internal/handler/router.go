@@ -5,17 +5,21 @@ import (
 	"time"
 
 	"github.com/Nuriklan/digital-commerce/internal/middleware"
-	"github.com/Nuriklan/digital-commerce/internal/storage"
-	"github.com/Nuriklan/digital-commerce/internal/worker"
+	"github.com/Nuriklan/digital-commerce/internal/service"
 )
 
-func NewRouter(storage *storage.MemoryStorage, pool *worker.Pool) http.Handler {
+func NewRouter(
+	userSvc *service.UserService,
+	productSvc *service.ProductService,
+	orderSvc *service.OrderService,
+	paymentSvc *service.PaymentService,
+) http.Handler {
 	mux := http.NewServeMux()
 
-	userH := NewUserHandler(storage)
-	productH := NewProductHandler(storage)
-	orderH := NewOrderHandler(storage, pool)
-	paymentH := NewPaymentHandler(storage)
+	userH := NewUserHandler(userSvc)
+	productH := NewProductHandler(productSvc)
+	orderH := NewOrderHandler(orderSvc)
+	paymentH := NewPaymentHandler(paymentSvc)
 
 	// Users
 	mux.HandleFunc("POST /users", userH.CreateUser)

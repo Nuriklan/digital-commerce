@@ -4,10 +4,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Nuriklan/digital-commerce/internal/repository"
+	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/google/uuid"
-
-	"github.com/Nuriklan/digital-commerce/internal/domain"
-	"github.com/Nuriklan/digital-commerce/internal/storage"
 )
 
 type CreateUserRequest struct {
@@ -16,11 +15,11 @@ type CreateUserRequest struct {
 }
 
 type UserHandler struct {
-	storage *storage.MemoryStorage
+	service *service.UserService
 }
 
-func NewUserHandler(storage *storage.MemoryStorage) *UserHandler {
-	return &UserHandler{storage: storage}
+func NewUserHandler(service *service.UserService) *UserHandler {
+	return &UserHandler{service: service}
 }
 
 func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
@@ -30,13 +29,12 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := domain.NewUser(req.Name, req.Email)
+	user, err := h.service.CreateUser(req.Name, req.Email)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	h.storage.SaveUser(user)
 	respondJSON(w, http.StatusCreated, user)
 }
 
@@ -48,9 +46,9 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.storage.GetUserByID(id)
+	user, err := h.service.GetUser(id)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, "user not found")
 			return
 		}
