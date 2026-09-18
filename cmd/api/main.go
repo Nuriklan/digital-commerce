@@ -27,10 +27,17 @@ func main() {
 	defer cancel()
 
 	// 3. Repositories layer
-	userRepo := repository.NewUserMemoryRepository()
-	productRepo := repository.NewProductMemoryRepository()
-	orderRepo := repository.NewOrderMemoryRepository()
-	paymentRepo := repository.NewPaymentMemoryRepository()
+	db, err := repository.NewPostgresDB(cfg.Database)
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+	defer db.Close()
+	log.Println("Successfully connected to PostgreSQL")
+
+	userRepo := repository.NewUserPostgresRepository(db)
+	productRepo := repository.NewProductPostgresRepository(db)
+	orderRepo := repository.NewOrderPostgresRepository(db)
+	paymentRepo := repository.NewPaymentPostgresRepository(db)
 
 	// Initial population with test products
 	game1, _ := domain.NewProduct("Cyberpunk 2077", 29.99)

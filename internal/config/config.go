@@ -7,8 +7,9 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig
-	Worker WorkerConfig
+	Server   ServerConfig
+	Worker   WorkerConfig
+	Database DatabaseConfig
 }
 
 type ServerConfig struct {
@@ -23,6 +24,13 @@ type WorkerConfig struct {
 	QueueSize int
 }
 
+type DatabaseConfig struct {
+	DSN             string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+}
+
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -34,6 +42,12 @@ func Load() *Config {
 		Worker: WorkerConfig{
 			Workers:   getEnvAsInt("WORKER_COUNT", 3),
 			QueueSize: getEnvAsInt("WORKER_QUEUE_SIZE", 20),
+		},
+		Database: DatabaseConfig{
+			DSN:             getEnv("DATABASE_URL", "postgres://commerce_user:commerce_password@localhost:5432/digital_commerce?sslmode=disable"),
+			MaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
+			MaxIdleConns:    getEnvAsInt("DB_MAX_IDLE_CONNS", 10),
+			ConnMaxLifetime: 15 * time.Minute,
 		},
 	}
 }

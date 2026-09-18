@@ -1,0 +1,21 @@
+services:
+    postgres:
+        image: postgres:16-alpine
+        container_name: digital_commerce_db
+        environment:
+            POSTGRES_USER: commerce_user
+            POSTGRES_PASSWORD: commerce_password
+            POSTGRES_DB: digital_commerce
+        ports:
+            - "5432:5432"
+        volumes:
+            - pgdata:/var/lib/postgresql/data
+            - ./migrations:/docker-entrypoint-initdb.d
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U commerce_user -d digital_commerce"]
+            interval: 5s
+            timeout: 5s
+            retries: 5
+
+volumes:
+    pgdata:
