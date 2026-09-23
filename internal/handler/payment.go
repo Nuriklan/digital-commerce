@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Nuriklan/digital-commerce/internal/domain"
 	"github.com/Nuriklan/digital-commerce/internal/repository"
 	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/google/uuid"
@@ -28,10 +29,18 @@ func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payment, err := h.service.ProcessPayment(req.OrderID)
+	idempotencyKey := r.Header.Get("Idempotency-Key")
+
+	payment, err := h.service.ProcessPayment(r.Context(), req.OrderID, idempotencyKey)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, domain.ErrOrderAlreadyPaid) ||
+			errors.Is(err, domain.ErrOrderAlreadyCancelled) ||
+			errors.Is(err, domain.ErrEmptyOrder) {
+			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		respondError(w, http.StatusBadRequest, err.Error())
@@ -49,7 +58,7 @@ func (h *PaymentHandler) GetPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payment, err := h.service.GetPayment(id)
+	payment, err := h.service.GetPayment(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, "payment not found")

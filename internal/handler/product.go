@@ -30,7 +30,7 @@ func (h *ProductHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	product, err := h.service.CreateProduct(req.Name, req.Price)
+	product, err := h.service.CreateProduct(r.Context(), req.Name, req.Price)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -47,7 +47,7 @@ func (h *ProductHandler) GetProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	product, err := h.service.GetProduct(id)
+	product, err := h.service.GetProduct(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, "product not found")
@@ -61,30 +61,24 @@ func (h *ProductHandler) GetProduct(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProductHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+
 	limit := 10
 	offset := 0
 
-	query := r.URL.Query()
-	if l := query.Get("limit"); l != "" {
-		if val, err := strconv.Atoi(l); err == nil && val > 0 {
-			limit = val
-		}
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+		limit = l
 	}
-	if o := query.Get("offset"); o != "" {
-		if val, err := strconv.Atoi(o); err == nil && val >= 0 {
-			offset = val
-		}
+	if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+		offset = o
 	}
 
-	products, err := h.service.ListProducts(limit, offset)
+	products, err := h.service.ListProducts(r.Context(), limit, offset)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to list products")
+		respondError(w, http.StatusInternalServerError, "failed to fetch products")
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{
-		"items":  products,
-		"limit":  limit,
-		"offset": offset,
-	})
+	respondJSON(w, http.StatusOK, products)
 }

@@ -29,7 +29,7 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.service.CreateUser(req.Name, req.Email)
+	user, err := h.service.CreateUser(r.Context(), req.Name, req.Email)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -46,7 +46,7 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.service.GetUser(id)
+	user, err := h.service.GetUser(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, "user not found")

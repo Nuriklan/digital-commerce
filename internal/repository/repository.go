@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"errors"
 
 	"github.com/Nuriklan/digital-commerce/internal/domain"
@@ -11,23 +12,35 @@ var (
 	ErrNotFound = errors.New("entity not found")
 )
 
+// TxManager defines the interface for transaction boundary management.
+type TxManager interface {
+	WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 type UserRepository interface {
-	Save(user domain.User) error
-	GetByID(id uuid.UUID) (domain.User, error)
+	Save(ctx context.Context, user domain.User) error
+	GetByID(ctx context.Context, id uuid.UUID) (domain.User, error)
 }
 
 type ProductRepository interface {
-	Save(product domain.Product) error
-	GetByID(id uuid.UUID) (domain.Product, error)
-	List(limit, offset int) ([]domain.Product, error)
+	Save(ctx context.Context, product domain.Product) error
+	GetByID(ctx context.Context, id uuid.UUID) (domain.Product, error)
+	List(ctx context.Context, limit, offset int) ([]domain.Product, error)
 }
 
 type OrderRepository interface {
-	Save(order domain.Order) error
-	GetByID(id uuid.UUID) (domain.Order, error)
+	Save(ctx context.Context, order domain.Order) error
+	SaveOptimistic(ctx context.Context, order domain.Order) error
+	GetByID(ctx context.Context, id uuid.UUID) (domain.Order, error)
+	GetByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.Order, error)
 }
 
 type PaymentRepository interface {
-	Save(payment domain.Payment) error
-	GetByID(id uuid.UUID) (domain.Payment, error)
+	Save(ctx context.Context, payment domain.Payment) error
+	GetByID(ctx context.Context, id uuid.UUID) (domain.Payment, error)
+}
+
+type IdempotencyRepository interface {
+	Get(ctx context.Context, key string) (*domain.IdempotencyRecord, error)
+	Save(ctx context.Context, record domain.IdempotencyRecord) error
 }

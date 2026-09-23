@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,11 +28,13 @@ func setupTestApp() *testContext {
 	productRepo := repository.NewProductMemoryRepository()
 	orderRepo := repository.NewOrderMemoryRepository()
 	paymentRepo := repository.NewPaymentMemoryRepository()
+	idempotencyRepo := repository.NewIdempotencyMemoryRepository()
+	txManager := repository.NewMemoryTxManager()
 
 	userSvc := service.NewUserService(userRepo)
 	productSvc := service.NewProductService(productRepo)
 	orderSvc := service.NewOrderService(orderRepo, userRepo, productRepo, nil)
-	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo)
+	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo, txManager, idempotencyRepo)
 
 	router := handler.NewRouter(userSvc, productSvc, orderSvc, paymentSvc)
 
@@ -158,8 +161,8 @@ func TestOrderLifecycle(t *testing.T) {
 	// Подготовим юзера и товар в хранилище
 	user, _ := domain.NewUser("Charlie", "charlie@example.com")
 	product, _ := domain.NewProduct("Steam Deck", 399.99)
-	_ = app.userRepo.Save(user)
-	_ = app.productRepo.Save(product)
+	_ = app.userRepo.Save(context.Background(), user)
+	_ = app.productRepo.Save(context.Background(), product)
 
 	// 1. Creating order
 	orderPayload := map[string]any{
@@ -200,5 +203,83 @@ func TestOrderLifecycle(t *testing.T) {
 
 	if cancelAgainRec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 Bad Request on duplicate cancel, got %d", cancelAgainRec.Code)
+	}
+}
+
+func TestPayment_IdempotencyAndTransactions(t *testing.T) {
+	app := setupTestApp()
+
+	user, _ := domain.NewUser("Dave", "dave@example.com")
+	product, _ := domain.NewProduct("Keyboard", 99.0)
+	_ = app.userRepo.Save(context.Background(), user)
+	_ = app.productRepo.Save(context.Background(), product)
+
+	// 1. Create order
+	orderPayload := map[string]any{
+		"user_id": user.ID.String(),
+		"items": []map[string]any{
+			{"product_id": product.ID.String(), "quantity": 1},
+		},
+	}
+	bodyBytes, _ := json.Marshal(orderPayload)
+	createReq := httptest.NewRequest(http.MethodPost, "/orders", bytes.NewBuffer(bodyBytes))
+	createRec := httptest.NewRecorder()
+	app.router.ServeHTTP(createRec, createReq)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d", createRec.Code)
+	}
+
+	var order domain.Order
+	_ = json.Unmarshal(createRec.Body.Bytes(), &order)
+
+	// 2. Pay with Idempotency-Key
+	idempotencyKey := "idemp-key-12345"
+	paymentPayload := map[string]any{
+		"order_id": order.ID.String(),
+	}
+	payBytes, _ := json.Marshal(paymentPayload)
+
+	payReq1 := httptest.NewRequest(http.MethodPost, "/payments", bytes.NewBuffer(payBytes))
+	payReq1.Header.Set("Idempotency-Key", idempotencyKey)
+	payRec1 := httptest.NewRecorder()
+	app.router.ServeHTTP(payRec1, payReq1)
+
+	if payRec1.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on first payment, got %d, body: %s", payRec1.Code, payRec1.Body.String())
+	}
+
+	var payment1 domain.Payment
+	_ = json.Unmarshal(payRec1.Body.Bytes(), &payment1)
+
+	if payment1.Status != domain.PaymentStatusSuccess {
+		t.Errorf("expected payment status success, got %s", payment1.Status)
+	}
+
+	// 3. Retry payment with the exact same Idempotency-Key
+	payReq2 := httptest.NewRequest(http.MethodPost, "/payments", bytes.NewBuffer(payBytes))
+	payReq2.Header.Set("Idempotency-Key", idempotencyKey)
+	payRec2 := httptest.NewRecorder()
+	app.router.ServeHTTP(payRec2, payReq2)
+
+	if payRec2.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on idempotent replay, got %d, body: %s", payRec2.Code, payRec2.Body.String())
+	}
+
+	var payment2 domain.Payment
+	_ = json.Unmarshal(payRec2.Body.Bytes(), &payment2)
+
+	if payment2.ID != payment1.ID {
+		t.Errorf("expected same payment ID on idempotent replay: got %s, want %s", payment2.ID, payment1.ID)
+	}
+
+	// 4. Try paying the already paid order with a DIFFERENT Idempotency-Key
+	payReq3 := httptest.NewRequest(http.MethodPost, "/payments", bytes.NewBuffer(payBytes))
+	payReq3.Header.Set("Idempotency-Key", "different-key-999")
+	payRec3 := httptest.NewRecorder()
+	app.router.ServeHTTP(payRec3, payReq3)
+
+	if payRec3.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request when paying already paid order, got %d, body: %s", payRec3.Code, payRec3.Body.String())
 	}
 }

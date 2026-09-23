@@ -41,7 +41,7 @@ func NewOrderService(
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID, items []CreateOrderItemDTO) (domain.Order, error) {
-	if _, err := s.userRepo.GetByID(userID); err != nil {
+	if _, err := s.userRepo.GetByID(ctx, userID); err != nil {
 		return domain.Order{}, fmt.Errorf("user not found: %w", err)
 	}
 
@@ -52,7 +52,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID, items 
 			return domain.Order{}, ErrInvalidQuantity
 		}
 
-		product, err := s.productRepo.GetByID(item.ProductID)
+		product, err := s.productRepo.GetByID(ctx, item.ProductID)
 		if err != nil {
 			return domain.Order{}, fmt.Errorf("product %s not found: %w", item.ProductID, err)
 		}
@@ -60,7 +60,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID, items 
 		order.AddItem(product, item.Quantity)
 	}
 
-	if err := s.orderRepo.Save(order); err != nil {
+	if err := s.orderRepo.Save(ctx, order); err != nil {
 		return domain.Order{}, fmt.Errorf("failed to save order: %w", err)
 	}
 
@@ -71,12 +71,12 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID, items 
 	return order, nil
 }
 
-func (s *OrderService) GetOrder(id uuid.UUID) (domain.Order, error) {
-	return s.orderRepo.GetByID(id)
+func (s *OrderService) GetOrder(ctx context.Context, id uuid.UUID) (domain.Order, error) {
+	return s.orderRepo.GetByID(ctx, id)
 }
 
-func (s *OrderService) CancelOrder(id uuid.UUID) (domain.Order, error) {
-	order, err := s.orderRepo.GetByID(id)
+func (s *OrderService) CancelOrder(ctx context.Context, id uuid.UUID) (domain.Order, error) {
+	order, err := s.orderRepo.GetByIDForUpdate(ctx, id)
 	if err != nil {
 		return domain.Order{}, err
 	}
@@ -85,7 +85,7 @@ func (s *OrderService) CancelOrder(id uuid.UUID) (domain.Order, error) {
 		return domain.Order{}, err
 	}
 
-	if err := s.orderRepo.Save(order); err != nil {
+	if err := s.orderRepo.Save(ctx, order); err != nil {
 		return domain.Order{}, err
 	}
 

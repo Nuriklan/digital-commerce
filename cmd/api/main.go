@@ -26,7 +26,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// 3. Repositories layer
+	// 3. Repositories and TxManager layer
 	db, err := repository.NewPostgresDB(cfg.Database)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
@@ -34,16 +34,18 @@ func main() {
 	defer db.Close()
 	log.Println("Successfully connected to PostgreSQL")
 
+	txManager := repository.NewPostgresTxManager(db)
 	userRepo := repository.NewUserPostgresRepository(db)
 	productRepo := repository.NewProductPostgresRepository(db)
 	orderRepo := repository.NewOrderPostgresRepository(db)
 	paymentRepo := repository.NewPaymentPostgresRepository(db)
+	idempotencyRepo := repository.NewIdempotencyPostgresRepository(db)
 
 	// Initial population with test products
 	game1, _ := domain.NewProduct("Cyberpunk 2077", 29.99)
 	game2, _ := domain.NewProduct("Witcher 3", 14.99)
-	_ = productRepo.Save(game1)
-	_ = productRepo.Save(game2)
+	_ = productRepo.Save(ctx, game1)
+	_ = productRepo.Save(ctx, game2)
 	log.Printf("Seeded products: %s (%s), %s (%s)", game1.Name, game1.ID, game2.Name, game2.ID)
 
 	// 4. Queue / workers layer
@@ -56,7 +58,7 @@ func main() {
 	userSvc := service.NewUserService(userRepo)
 	productSvc := service.NewProductService(productRepo)
 	orderSvc := service.NewOrderService(orderRepo, userRepo, productRepo, eventsPublisher)
-	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo)
+	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo, txManager, idempotencyRepo)
 
 	// 6. Handlers and routing
 	router := handler.NewRouter(userSvc, productSvc, orderSvc, paymentSvc)

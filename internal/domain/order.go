@@ -20,7 +20,8 @@ var (
 	ErrOrderAlreadyCancelled = errors.New("order is already cancelled")
 	ErrEmptyOrder            = errors.New("order has no items")
 	ErrItemNotFound          = errors.New("item not found in order")
-	ErrOrderNotFound         = errors.New("order not found")
+	ErrOrderNotFound          = errors.New("order not found")
+	ErrOptimisticLockConflict = errors.New("optimistic lock conflict: order was updated concurrently")
 )
 
 type OrderItem struct {
@@ -40,6 +41,7 @@ type Order struct {
 	UserID    uuid.UUID
 	Items     []OrderItem
 	Status    OrderStatus
+	Version   int
 	CreatedAt time.Time
 }
 
@@ -49,6 +51,7 @@ func NewOrder(userID uuid.UUID) Order {
 		UserID:    userID,
 		Items:     []OrderItem{},
 		Status:    OrderStatusPending,
+		Version:   1,
 		CreatedAt: time.Now(),
 	}
 }

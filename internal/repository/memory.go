@@ -1,11 +1,28 @@
 package repository
 
 import (
+	"context"
 	"sync"
 
 	"github.com/Nuriklan/digital-commerce/internal/domain"
 	"github.com/google/uuid"
 )
+
+// --- Memory Transaction Manager ---
+
+type MemoryTxManager struct {
+	mu sync.Mutex
+}
+
+func NewMemoryTxManager() *MemoryTxManager {
+	return &MemoryTxManager{}
+}
+
+func (m *MemoryTxManager) WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return fn(ctx)
+}
 
 // --- User Memory Repository ---
 
@@ -20,14 +37,14 @@ func NewUserMemoryRepository() *UserMemoryRepository {
 	}
 }
 
-func (r *UserMemoryRepository) Save(user domain.User) error {
+func (r *UserMemoryRepository) Save(ctx context.Context, user domain.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.users[user.ID] = user
 	return nil
 }
 
-func (r *UserMemoryRepository) GetByID(id uuid.UUID) (domain.User, error) {
+func (r *UserMemoryRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	user, ok := r.users[id]
@@ -50,14 +67,14 @@ func NewProductMemoryRepository() *ProductMemoryRepository {
 	}
 }
 
-func (r *ProductMemoryRepository) Save(p domain.Product) error {
+func (r *ProductMemoryRepository) Save(ctx context.Context, p domain.Product) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.products[p.ID] = p
 	return nil
 }
 
-func (r *ProductMemoryRepository) GetByID(id uuid.UUID) (domain.Product, error) {
+func (r *ProductMemoryRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Product, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	p, ok := r.products[id]
@@ -67,7 +84,7 @@ func (r *ProductMemoryRepository) GetByID(id uuid.UUID) (domain.Product, error) 
 	return p, nil
 }
 
-func (r *ProductMemoryRepository) List(limit, offset int) ([]domain.Product, error) {
+func (r *ProductMemoryRepository) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -101,14 +118,50 @@ func NewOrderMemoryRepository() *OrderMemoryRepository {
 	}
 }
 
-func (r *OrderMemoryRepository) Save(o domain.Order) error {
+func (r *OrderMemoryRepository) Save(ctx context.Context, o domain.Order) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if existing, ok := r.orders[o.ID]; ok {
+		o.Version = existing.Version + 1
+	} else if o.Version == 0 {
+		o.Version = 1
+	}
+
 	r.orders[o.ID] = o
 	return nil
 }
 
-func (r *OrderMemoryRepository) GetByID(id uuid.UUID) (domain.Order, error) {
+func (r *OrderMemoryRepository) SaveOptimistic(ctx context.Context, o domain.Order) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.orders[o.ID]
+	if !ok {
+		return ErrNotFound
+	}
+
+	if existing.Version != o.Version {
+		return domain.ErrOptimisticLockConflict
+	}
+
+	o.Version = existing.Version + 1
+	r.orders[o.ID] = o
+	return nil
+}
+
+func (r *OrderMemoryRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Order, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	o, ok := r.orders[id]
+	if !ok {
+		return domain.Order{}, ErrNotFound
+	}
+	return o, nil
+}
+
+func (r *OrderMemoryRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.Order, error) {
+	// In-memory simulation: acquiring a read lock for the order
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	o, ok := r.orders[id]
@@ -131,14 +184,14 @@ func NewPaymentMemoryRepository() *PaymentMemoryRepository {
 	}
 }
 
-func (r *PaymentMemoryRepository) Save(p domain.Payment) error {
+func (r *PaymentMemoryRepository) Save(ctx context.Context, p domain.Payment) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.payments[p.ID] = p
 	return nil
 }
 
-func (r *PaymentMemoryRepository) GetByID(id uuid.UUID) (domain.Payment, error) {
+func (r *PaymentMemoryRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Payment, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	p, ok := r.payments[id]
@@ -146,4 +199,36 @@ func (r *PaymentMemoryRepository) GetByID(id uuid.UUID) (domain.Payment, error) 
 		return domain.Payment{}, ErrNotFound
 	}
 	return p, nil
+}
+
+// --- Idempotency Memory Repository ---
+
+type IdempotencyMemoryRepository struct {
+	mu      sync.RWMutex
+	records map[string]domain.IdempotencyRecord
+}
+
+func NewIdempotencyMemoryRepository() *IdempotencyMemoryRepository {
+	return &IdempotencyMemoryRepository{
+		records: make(map[string]domain.IdempotencyRecord),
+	}
+}
+
+func (r *IdempotencyMemoryRepository) Get(ctx context.Context, key string) (*domain.IdempotencyRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rec, ok := r.records[key]
+	if !ok {
+		return nil, nil
+	}
+	return &rec, nil
+}
+
+func (r *IdempotencyMemoryRepository) Save(ctx context.Context, record domain.IdempotencyRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.records[record.Key]; !ok {
+		r.records[record.Key] = record
+	}
+	return nil
 }

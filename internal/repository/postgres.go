@@ -13,6 +13,21 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+type DBExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type txKey struct{}
+
+func getExecutor(ctx context.Context, defaultDB *sql.DB) DBExecutor {
+	if tx, ok := ctx.Value(txKey{}).(*sql.Tx); ok && tx != nil {
+		return tx
+	}
+	return defaultDB
+}
+
 func NewPostgresDB(cfg config.DatabaseConfig) (*sql.DB, error) {
 	db, err := sql.Open("pgx", cfg.DSN)
 	if err != nil {
@@ -33,7 +48,52 @@ func NewPostgresDB(cfg config.DatabaseConfig) (*sql.DB, error) {
 	return db, nil
 }
 
+// --- Postgres Transaction Manager ---
+
+type PostgresTxManager struct {
+	db *sql.DB
+}
+
+func NewPostgresTxManager(db *sql.DB) *PostgresTxManager {
+	return &PostgresTxManager{db: db}
+}
+
+func (m *PostgresTxManager) WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	// If already in a transaction, reuse it
+	if _, ok := ctx.Value(txKey{}).(*sql.Tx); ok {
+		return fn(ctx)
+	}
+
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	txCtx := context.WithValue(ctx, txKey{}, tx)
+
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	if err := fn(txCtx); err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return fmt.Errorf("transaction error: %w, rollback error: %v", err, rbErr)
+		}
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
 // --- User Postgres Repository ---
+
 type UserPostgresRepository struct {
 	db *sql.DB
 }
@@ -42,7 +102,8 @@ func NewUserPostgresRepository(db *sql.DB) *UserPostgresRepository {
 	return &UserPostgresRepository{db: db}
 }
 
-func (r *UserPostgresRepository) Save(user domain.User) error {
+func (r *UserPostgresRepository) Save(ctx context.Context, user domain.User) error {
+	exec := getExecutor(ctx, r.db)
 	query := `
 		INSERT INTO users (id, name, email, created_at)
 		VALUES ($1, $2, $3, $4)
@@ -50,18 +111,19 @@ func (r *UserPostgresRepository) Save(user domain.User) error {
 		SET name = EXCLUDED.name, email = EXCLUDED.email;
 	`
 
-	_, err := r.db.Exec(query, user.ID, user.Name, user.Email, user.CreatedAt)
+	_, err := exec.ExecContext(ctx, query, user.ID, user.Name, user.Email, user.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save user: %w", err)
 	}
 	return nil
 }
 
-func (r *UserPostgresRepository) GetByID(id uuid.UUID) (domain.User, error) {
+func (r *UserPostgresRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.User, error) {
+	exec := getExecutor(ctx, r.db)
 	query := `SELECT id, name, email, created_at FROM users WHERE id = $1`
 	var u domain.User
 
-	err := r.db.QueryRow(query, id).Scan(&u.ID, &u.Name, &u.Email, &u.CreatedAt)
+	err := exec.QueryRowContext(ctx, query, id).Scan(&u.ID, &u.Name, &u.Email, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.User{}, ErrNotFound
@@ -81,25 +143,27 @@ func NewProductPostgresRepository(db *sql.DB) *ProductPostgresRepository {
 	return &ProductPostgresRepository{db: db}
 }
 
-func (r *ProductPostgresRepository) Save(p domain.Product) error {
+func (r *ProductPostgresRepository) Save(ctx context.Context, p domain.Product) error {
+	exec := getExecutor(ctx, r.db)
 	query := `
 		INSERT INTO products (id, name, price)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (id) DO UPDATE
 		SET name = EXCLUDED.name, price = EXCLUDED.price;
 	`
-	_, err := r.db.Exec(query, p.ID, p.Name, p.Price)
+	_, err := exec.ExecContext(ctx, query, p.ID, p.Name, p.Price)
 	if err != nil {
 		return fmt.Errorf("failed to save product: %w", err)
 	}
 	return nil
 }
 
-func (r *ProductPostgresRepository) GetByID(id uuid.UUID) (domain.Product, error) {
+func (r *ProductPostgresRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Product, error) {
+	exec := getExecutor(ctx, r.db)
 	query := `SELECT id, name, price FROM products WHERE id = $1`
 	var p domain.Product
 
-	err := r.db.QueryRow(query, id).Scan(&p.ID, &p.Name, &p.Price)
+	err := exec.QueryRowContext(ctx, query, id).Scan(&p.ID, &p.Name, &p.Price)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Product{}, ErrNotFound
@@ -109,9 +173,10 @@ func (r *ProductPostgresRepository) GetByID(id uuid.UUID) (domain.Product, error
 	return p, nil
 }
 
-func (r *ProductPostgresRepository) List(limit, offset int) ([]domain.Product, error) {
+func (r *ProductPostgresRepository) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
+	exec := getExecutor(ctx, r.db)
 	query := `SELECT id, name, price FROM products ORDER BY created_at DESC LIMIT $1 OFFSET $2`
-	rows, err := r.db.Query(query, limit, offset)
+	rows, err := exec.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list products: %w", err)
 	}
@@ -145,19 +210,15 @@ func NewOrderPostgresRepository(db *sql.DB) *OrderPostgresRepository {
 	return &OrderPostgresRepository{db: db}
 }
 
-func (r *OrderPostgresRepository) Save(o domain.Order) error {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
+func (r *OrderPostgresRepository) saveWithExecutor(ctx context.Context, exec DBExecutor, o domain.Order) error {
 	orderQuery := `
-		INSERT INTO orders (id, user_id, status, created_at)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status;
+		INSERT INTO orders (id, user_id, status, version, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (id) DO UPDATE SET 
+			status = EXCLUDED.status,
+			version = orders.version + 1;
 	`
-	if _, err := tx.Exec(orderQuery, o.ID, o.UserID, string(o.Status), o.CreatedAt); err != nil {
+	if _, err := exec.ExecContext(ctx, orderQuery, o.ID, o.UserID, string(o.Status), o.Version, o.CreatedAt); err != nil {
 		return fmt.Errorf("failed to upsert order: %w", err)
 	}
 
@@ -167,20 +228,66 @@ func (r *OrderPostgresRepository) Save(o domain.Order) error {
 		ON CONFLICT (id) DO NOTHING;
 	`
 	for _, item := range o.Items {
-		if _, err := tx.Exec(itemQuery, item.ID, o.ID, item.ProductID, item.Price, item.Quantity); err != nil {
+		if _, err := exec.ExecContext(ctx, itemQuery, item.ID, o.ID, item.ProductID, item.Price, item.Quantity); err != nil {
 			return fmt.Errorf("failed to insert order item: %w", err)
 		}
+	}
+	return nil
+}
+
+func (r *OrderPostgresRepository) Save(ctx context.Context, o domain.Order) error {
+	if tx, ok := ctx.Value(txKey{}).(*sql.Tx); ok && tx != nil {
+		return r.saveWithExecutor(ctx, tx, o)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := r.saveWithExecutor(ctx, tx, o); err != nil {
+		return err
 	}
 
 	return tx.Commit()
 }
 
-func (r *OrderPostgresRepository) GetByID(id uuid.UUID) (domain.Order, error) {
-	orderQuery := `SELECT id, user_id, status, created_at FROM orders WHERE id = $1`
+func (r *OrderPostgresRepository) SaveOptimistic(ctx context.Context, o domain.Order) error {
+	exec := getExecutor(ctx, r.db)
+	query := `
+		UPDATE orders 
+		SET status = $1, version = version + 1 
+		WHERE id = $2 AND version = $3
+	`
+	res, err := exec.ExecContext(ctx, query, string(o.Status), o.ID, o.Version)
+	if err != nil {
+		return fmt.Errorf("failed to update order optimistically: %w", err)
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		var exists bool
+		checkErr := exec.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM orders WHERE id = $1)", o.ID).Scan(&exists)
+		if checkErr == nil && exists {
+			return domain.ErrOptimisticLockConflict
+		}
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *OrderPostgresRepository) getOrderByQuery(ctx context.Context, query string, id uuid.UUID) (domain.Order, error) {
+	exec := getExecutor(ctx, r.db)
 	var o domain.Order
 	var statusStr string
 
-	err := r.db.QueryRow(orderQuery, id).Scan(&o.ID, &o.UserID, &statusStr, &o.CreatedAt)
+	err := exec.QueryRowContext(ctx, query, id).Scan(&o.ID, &o.UserID, &statusStr, &o.Version, &o.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Order{}, ErrNotFound
@@ -195,7 +302,7 @@ func (r *OrderPostgresRepository) GetByID(id uuid.UUID) (domain.Order, error) {
 		JOIN products p ON p.id = oi.product_id
 		WHERE oi.order_id = $1
 	`
-	rows, err := r.db.Query(itemsQuery, id)
+	rows, err := exec.QueryContext(ctx, itemsQuery, id)
 	if err != nil {
 		return domain.Order{}, fmt.Errorf("failed to get order items: %w", err)
 	}
@@ -213,6 +320,16 @@ func (r *OrderPostgresRepository) GetByID(id uuid.UUID) (domain.Order, error) {
 	return o, nil
 }
 
+func (r *OrderPostgresRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Order, error) {
+	query := `SELECT id, user_id, status, version, created_at FROM orders WHERE id = $1`
+	return r.getOrderByQuery(ctx, query, id)
+}
+
+func (r *OrderPostgresRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.Order, error) {
+	query := `SELECT id, user_id, status, version, created_at FROM orders WHERE id = $1 FOR UPDATE`
+	return r.getOrderByQuery(ctx, query, id)
+}
+
 // --- Payment Postgres Repository ---
 
 type PaymentPostgresRepository struct {
@@ -223,25 +340,27 @@ func NewPaymentPostgresRepository(db *sql.DB) *PaymentPostgresRepository {
 	return &PaymentPostgresRepository{db: db}
 }
 
-func (r *PaymentPostgresRepository) Save(p domain.Payment) error {
+func (r *PaymentPostgresRepository) Save(ctx context.Context, p domain.Payment) error {
+	exec := getExecutor(ctx, r.db)
 	query := `
 		INSERT INTO payments (id, order_id, amount, status, created_at)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status;
 	`
-	_, err := r.db.Exec(query, p.ID, p.OrderID, p.Amount, string(p.Status), p.CreatedAt)
+	_, err := exec.ExecContext(ctx, query, p.ID, p.OrderID, p.Amount, string(p.Status), p.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save payment: %w", err)
 	}
 	return nil
 }
 
-func (r *PaymentPostgresRepository) GetByID(id uuid.UUID) (domain.Payment, error) {
+func (r *PaymentPostgresRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Payment, error) {
+	exec := getExecutor(ctx, r.db)
 	query := `SELECT id, order_id, amount, status, created_at FROM payments WHERE id = $1`
 	var p domain.Payment
 	var statusStr string
 
-	err := r.db.QueryRow(query, id).Scan(&p.ID, &p.OrderID, &p.Amount, &statusStr, &p.CreatedAt)
+	err := exec.QueryRowContext(ctx, query, id).Scan(&p.ID, &p.OrderID, &p.Amount, &statusStr, &p.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Payment{}, ErrNotFound
@@ -250,4 +369,45 @@ func (r *PaymentPostgresRepository) GetByID(id uuid.UUID) (domain.Payment, error
 	}
 	p.Status = domain.PaymentStatus(statusStr)
 	return p, nil
+}
+
+// --- Idempotency Postgres Repository ---
+
+type IdempotencyPostgresRepository struct {
+	db *sql.DB
+}
+
+func NewIdempotencyPostgresRepository(db *sql.DB) *IdempotencyPostgresRepository {
+	return &IdempotencyPostgresRepository{db: db}
+}
+
+func (r *IdempotencyPostgresRepository) Get(ctx context.Context, key string) (*domain.IdempotencyRecord, error) {
+	exec := getExecutor(ctx, r.db)
+	query := `SELECT key, payment_id, order_id, status_code, response_body, created_at FROM idempotency_keys WHERE key = $1`
+	var rec domain.IdempotencyRecord
+
+	err := exec.QueryRowContext(ctx, query, key).Scan(
+		&rec.Key, &rec.PaymentID, &rec.OrderID, &rec.StatusCode, &rec.ResponseBody, &rec.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get idempotency key: %w", err)
+	}
+	return &rec, nil
+}
+
+func (r *IdempotencyPostgresRepository) Save(ctx context.Context, record domain.IdempotencyRecord) error {
+	exec := getExecutor(ctx, r.db)
+	query := `
+		INSERT INTO idempotency_keys (key, payment_id, order_id, status_code, response_body, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (key) DO NOTHING;
+	`
+	_, err := exec.ExecContext(ctx, query, record.Key, record.PaymentID, record.OrderID, record.StatusCode, record.ResponseBody, record.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to save idempotency record: %w", err)
+	}
+	return nil
 }

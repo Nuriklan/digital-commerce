@@ -31,8 +31,8 @@ func TestOrderService_CreateOrder_Success(t *testing.T) {
 
 	user, _ := domain.NewUser("Alice", "alice@example.com")
 	product, _ := domain.NewProduct("Go in Action Book", 35.0)
-	_ = userRepo.Save(user)
-	_ = productRepo.Save(product)
+	_ = userRepo.Save(context.Background(), user)
+	_ = productRepo.Save(context.Background(), product)
 
 	items := []service.CreateOrderItemDTO{
 		{ProductID: product.ID, Quantity: 2},
@@ -55,7 +55,7 @@ func TestOrderService_CreateOrder_Success(t *testing.T) {
 		t.Errorf("expected total %.2f, got %.2f", expectedTotal, order.CalculateTotal())
 	}
 
-	savedOrder, err := orderRepo.GetByID(order.ID)
+	savedOrder, err := orderRepo.GetByID(context.Background(), order.ID)
 	if err != nil {
 		t.Fatalf("expected order to be in repository: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestOrderService_CreateOrder_InvalidQuantity(t *testing.T) {
 	svc := service.NewOrderService(orderRepo, userRepo, productRepo, nil)
 
 	user, _ := domain.NewUser("Alice", "alice@example.com")
-	_ = userRepo.Save(user)
+	_ = userRepo.Save(context.Background(), user)
 
 	items := []service.CreateOrderItemDTO{
 		{ProductID: uuid.New(), Quantity: -1},
