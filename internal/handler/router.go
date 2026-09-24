@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/Nuriklan/digital-commerce/internal/middleware"
 	"github.com/Nuriklan/digital-commerce/internal/service"
@@ -13,6 +12,7 @@ func NewRouter(
 	productSvc *service.ProductService,
 	orderSvc *service.OrderService,
 	paymentSvc *service.PaymentService,
+	rateLimiter *middleware.RedisRateLimiter,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -44,12 +44,10 @@ func NewRouter(
 		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	limiter := middleware.NewRateLimiter(5, 10, time.Second)
-
 	return middleware.Chain(
 		mux,
 		middleware.RequestID,
-		middleware.Limit(limiter),
+		middleware.RedisLimit(rateLimiter),
 		middleware.Logger,
 		middleware.Recoverer,
 	)

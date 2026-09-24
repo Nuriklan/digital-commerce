@@ -13,9 +13,11 @@ import (
 	"github.com/Nuriklan/digital-commerce/internal/config"
 	"github.com/Nuriklan/digital-commerce/internal/domain"
 	"github.com/Nuriklan/digital-commerce/internal/handler"
+	"github.com/Nuriklan/digital-commerce/internal/middleware"
 	"github.com/Nuriklan/digital-commerce/internal/repository"
 	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/Nuriklan/digital-commerce/internal/worker"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -26,7 +28,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// 3. Repositories and TxManager layer
+	// 3. PostgreSQL connection
 	db, err := repository.NewPostgresDB(cfg.Database)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
@@ -34,9 +36,23 @@ func main() {
 	defer db.Close()
 	log.Println("Successfully connected to PostgreSQL")
 
+	// 4. Redis connection
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Fatalf("failed to connect to Redis: %v", err)
+	}
+	defer rdb.Close()
+	log.Println("Successfully connected to Redis")
+
+	// 5. Repositories (Decorating productRepo with Cache)
 	txManager := repository.NewPostgresTxManager(db)
 	userRepo := repository.NewUserPostgresRepository(db)
-	productRepo := repository.NewProductPostgresRepository(db)
+	baseProductRepo := repository.NewProductPostgresRepository(db)
+	productRepo := repository.NewCachedProductRepository(baseProductRepo, rdb, cfg.Redis.ProductTTL)
 	orderRepo := repository.NewOrderPostgresRepository(db)
 	paymentRepo := repository.NewPaymentPostgresRepository(db)
 	idempotencyRepo := repository.NewIdempotencyPostgresRepository(db)
@@ -48,22 +64,24 @@ func main() {
 	_ = productRepo.Save(ctx, game2)
 	log.Printf("Seeded products: %s (%s), %s (%s)", game1.Name, game1.ID, game2.Name, game2.ID)
 
-	// 4. Queue / workers layer
+	// 6. Queue / workers layer
 	pool := worker.NewPool(cfg.Worker.Workers, cfg.Worker.QueueSize, worker.HandleOrderCreated)
 	pool.Start(ctx)
 
 	eventsPublisher := service.NewWorkerPoolEventPublisher(pool)
 
-	// 5. Use Cases / Business logic
+	// 7. Use Cases / Business logic
 	userSvc := service.NewUserService(userRepo)
 	productSvc := service.NewProductService(productRepo)
 	orderSvc := service.NewOrderService(orderRepo, userRepo, productRepo, eventsPublisher)
 	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo, txManager, idempotencyRepo)
 
-	// 6. Handlers and routing
-	router := handler.NewRouter(userSvc, productSvc, orderSvc, paymentSvc)
+	rateLimiter := middleware.NewRedisRateLimiter(rdb, 10, time.Second)
 
-	// 7. HTTP server configuration
+	// 8. Handlers and routing
+	router := handler.NewRouter(userSvc, productSvc, orderSvc, paymentSvc, rateLimiter)
+
+	// 9. HTTP server configuration
 	server := &http.Server{
 		Addr:         cfg.Server.Port,
 		Handler:      router,
@@ -79,7 +97,7 @@ func main() {
 		}
 	}()
 
-	// 8. Graceful shutdown
+	// 10. Graceful shutdown
 	<-ctx.Done()
 	log.Println("Shutting down server gracefully...")
 

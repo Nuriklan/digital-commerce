@@ -10,6 +10,7 @@ type Config struct {
 	Server   ServerConfig
 	Worker   WorkerConfig
 	Database DatabaseConfig
+	Redis    RedisConfig
 }
 
 type ServerConfig struct {
@@ -31,6 +32,13 @@ type DatabaseConfig struct {
 	ConnMaxLifetime time.Duration
 }
 
+type RedisConfig struct {
+	Addr       string
+	Password   string
+	DB         int
+	ProductTTL time.Duration
+}
+
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -48,6 +56,12 @@ func Load() *Config {
 			MaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
 			MaxIdleConns:    getEnvAsInt("DB_MAX_IDLE_CONNS", 10),
 			ConnMaxLifetime: 15 * time.Minute,
+		},
+		Redis: RedisConfig{
+			Addr:       getEnv("REDIS_ADDR", "localhost:6379"),
+			Password:   getEnv("REDIS_PASSWORD", ""),
+			DB:         getEnvAsInt("REDIS_DB", 0),
+			ProductTTL: 10 * time.Minute,
 		},
 	}
 }
