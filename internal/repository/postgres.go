@@ -146,12 +146,12 @@ func NewProductPostgresRepository(db *sql.DB) *ProductPostgresRepository {
 func (r *ProductPostgresRepository) Save(ctx context.Context, p domain.Product) error {
 	exec := getExecutor(ctx, r.db)
 	query := `
-		INSERT INTO products (id, name, price)
-		VALUES ($1, $2, $3)
+		INSERT INTO products (id, name, price, created_at)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (id) DO UPDATE
 		SET name = EXCLUDED.name, price = EXCLUDED.price;
 	`
-	_, err := exec.ExecContext(ctx, query, p.ID, p.Name, p.Price)
+	_, err := exec.ExecContext(ctx, query, p.ID, p.Name, p.Price, p.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save product: %w", err)
 	}
@@ -160,10 +160,10 @@ func (r *ProductPostgresRepository) Save(ctx context.Context, p domain.Product) 
 
 func (r *ProductPostgresRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Product, error) {
 	exec := getExecutor(ctx, r.db)
-	query := `SELECT id, name, price FROM products WHERE id = $1`
+	query := `SELECT id, name, price, created_at FROM products WHERE id = $1`
 	var p domain.Product
 
-	err := exec.QueryRowContext(ctx, query, id).Scan(&p.ID, &p.Name, &p.Price)
+	err := exec.QueryRowContext(ctx, query, id).Scan(&p.ID, &p.Name, &p.Price, &p.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Product{}, ErrNotFound
@@ -175,7 +175,7 @@ func (r *ProductPostgresRepository) GetByID(ctx context.Context, id uuid.UUID) (
 
 func (r *ProductPostgresRepository) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
 	exec := getExecutor(ctx, r.db)
-	query := `SELECT id, name, price FROM products ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	query := `SELECT id, name, price, created_at FROM products ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 	rows, err := exec.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list products: %w", err)
@@ -185,7 +185,7 @@ func (r *ProductPostgresRepository) List(ctx context.Context, limit, offset int)
 	var products []domain.Product
 	for rows.Next() {
 		var p domain.Product
-		if err := rows.Scan(&p.ID, &p.Name, &p.Price); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Price, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan product: %w", err)
 		}
 		products = append(products, p)

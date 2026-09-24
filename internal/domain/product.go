@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -13,9 +14,10 @@ var (
 )
 
 type Product struct {
-	ID    uuid.UUID
-	Name  string
-	Price float64
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	Price     float64   `json:"price"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func NewProduct(name string, price float64) (Product, error) {
@@ -27,9 +29,10 @@ func NewProduct(name string, price float64) (Product, error) {
 	}
 
 	return Product{
-		ID:    uuid.New(),
-		Name:  name,
-		Price: price,
+		ID:        uuid.New(),
+		Name:      name,
+		Price:     price,
+		CreatedAt: time.Now(),
 	}, nil
 }
 

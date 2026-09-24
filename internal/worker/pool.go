@@ -36,6 +36,9 @@ func (p *Pool) Start(ctx context.Context) {
 }
 
 func (p *Pool) Submit(ctx context.Context, job Job) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	select {
 	case p.jobs <- job:
 		return true

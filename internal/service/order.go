@@ -19,24 +19,28 @@ type CreateOrderItemDTO struct {
 	Quantity  int
 }
 
+type ProductCatalog interface {
+	GetByID(ctx context.Context, id uuid.UUID) (domain.Product, error)
+}
+
 type OrderService struct {
-	orderRepo   repository.OrderRepository
-	userRepo    repository.UserRepository
-	productRepo repository.ProductRepository
-	publisher   OrderEventPublisher
+	orderRepo repository.OrderRepository
+	userRepo  repository.UserRepository
+	catalog   ProductCatalog
+	publisher OrderEventPublisher
 }
 
 func NewOrderService(
 	orderRepo repository.OrderRepository,
 	userRepo repository.UserRepository,
-	productRepo repository.ProductRepository,
+	catalog ProductCatalog,
 	publisher OrderEventPublisher,
 ) *OrderService {
 	return &OrderService{
-		orderRepo:   orderRepo,
-		userRepo:    userRepo,
-		productRepo: productRepo,
-		publisher:   publisher,
+		orderRepo: orderRepo,
+		userRepo:  userRepo,
+		catalog:   catalog,
+		publisher: publisher,
 	}
 }
 
@@ -52,7 +56,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID, items 
 			return domain.Order{}, ErrInvalidQuantity
 		}
 
-		product, err := s.productRepo.GetByID(ctx, item.ProductID)
+		product, err := s.catalog.GetByID(ctx, item.ProductID)
 		if err != nil {
 			return domain.Order{}, fmt.Errorf("product %s not found: %w", item.ProductID, err)
 		}
