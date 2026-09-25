@@ -26,9 +26,9 @@ func main() {
 		port = ":8082"
 	}
 
-	catalogURL := os.Getenv("CATALOG_SERVICE_URL")
-	if catalogURL == "" {
-		catalogURL = "http://localhost:8081"
+	catalogGRPCAddr := os.Getenv("CATALOG_GRPC_ADDR")
+	if catalogGRPCAddr == "" {
+		catalogGRPCAddr = "localhost:50051"
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -48,8 +48,12 @@ func main() {
 	paymentRepo := repository.NewPaymentPostgresRepository(db)
 	idempotencyRepo := repository.NewIdempotencyPostgresRepository(db)
 
-	// 3. Interservice client to Catalog Service with timeout and retry
-	catalogClient := client.NewCatalogHTTPClient(catalogURL, 2*time.Second)
+	// 3. gRPC Client to Catalog Service with connection lifecycle and timeout
+	catalogClient, err := client.NewCatalogGRPCClient(catalogGRPCAddr, 2*time.Second)
+	if err != nil {
+		log.Fatalf("[Order Service] failed to initialize Catalog gRPC client: %v", err)
+	}
+	defer catalogClient.Close()
 
 	// 4. Background workers
 	pool := worker.NewPool(cfg.Worker.Workers, cfg.Worker.QueueSize, worker.HandleOrderCreated)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,17 +14,26 @@ import (
 	"github.com/Nuriklan/digital-commerce/internal/config"
 	"github.com/Nuriklan/digital-commerce/internal/domain"
 	"github.com/Nuriklan/digital-commerce/internal/handler"
+	grpchandler "github.com/Nuriklan/digital-commerce/internal/handler/grpc"
+	"github.com/Nuriklan/digital-commerce/internal/middleware"
 	"github.com/Nuriklan/digital-commerce/internal/repository"
 	"github.com/Nuriklan/digital-commerce/internal/service"
+	catalogpb "github.com/Nuriklan/digital-commerce/proto/catalog"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/grpc"
 )
 
 func main() {
 	cfg := config.Load()
 
-	port := os.Getenv("CATALOG_PORT")
-	if port == "" {
-		port = ":8081"
+	httpPort := os.Getenv("CATALOG_PORT")
+	if httpPort == "" {
+		httpPort = ":8081"
+	}
+
+	grpcPort := os.Getenv("CATALOG_GRPC_PORT")
+	if grpcPort == "" {
+		grpcPort = ":50051"
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -56,10 +66,11 @@ func main() {
 
 	// 4. Service and HTTP-handlers
 	productSvc := service.NewProductService(productRepo)
-	router := handler.NewCatalogRouter(productSvc)
 
-	server := &http.Server{
-		Addr:         port,
+	// 5. HTTP Server (REST API)
+	router := handler.NewCatalogRouter(productSvc)
+	httpServer := &http.Server{
+		Addr:         httpPort,
 		Handler:      router,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
@@ -67,22 +78,48 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("[Catalog Service] listening on http://localhost%s", server.Addr)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("[Catalog Service] listening on http://localhost%s", httpServer.Addr)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("[Catalog Service] error: %v", err)
 		}
 	}()
 
+	// 6. gRPC Server
+	lis, err := net.Listen("tcp", grpcPort)
+	if err != nil {
+		log.Fatalf("[Catalog Service] failed to listen TCP port: %s %v", grpcPort, err)
+	}
+
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			middleware.RecoveryUnaryServerInterceptor,
+			middleware.LoggingUnaryServerInterceptor,
+		),
+	)
+	catalogGRPCServer := grpchandler.NewCatalogGRPCServer(productSvc)
+	catalogpb.RegisterCatalogServiceServer(grpcServer, catalogGRPCServer)
+
+	go func() {
+		log.Printf("[Catalog Service] gRPC listening on %s", grpcPort)
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Fatalf("[Catalog Service] gRPC error: %v", err)
+		}
+	}()
+
+	// 7. Graceful Shutdown
 	<-ctx.Done()
-	log.Println("[Catalog Service] shutting down...")
+	log.Println("[Catalog Service] shutting down gracefully...")
+
+	grpcServer.GracefulStop()
+	log.Println("[Catalog Service] gRPC server stopped.")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("[Catalog Service] shutdown failed: %v", err)
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("[Catalog Service] HTTP shutdown failed: %v", err)
 	}
-	log.Println("[Catalog Service] stopped gracefully.")
+	log.Println("[Catalog Service] HTTP server stopped.")
 }
 
 func seedProducts(ctx context.Context, repo repository.ProductRepository) {
