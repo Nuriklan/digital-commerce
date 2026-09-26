@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -11,6 +12,7 @@ type Config struct {
 	Worker   WorkerConfig
 	Database DatabaseConfig
 	Redis    RedisConfig
+	Kafka    KafkaConfig
 }
 
 type ServerConfig struct {
@@ -39,7 +41,14 @@ type RedisConfig struct {
 	ProductTTL time.Duration
 }
 
+type KafkaConfig struct {
+	Brokers []string
+}
+
 func Load() *Config {
+	kafkaBrokersRaw := getEnv("KAFKA_BROKERS", "localhost:9092")
+	brokers := strings.Split(kafkaBrokersRaw, ",")
+
 	return &Config{
 		Server: ServerConfig{
 			Port:         getEnv("SERVER_PORT", ":8080"),
@@ -62,6 +71,9 @@ func Load() *Config {
 			Password:   getEnv("REDIS_PASSWORD", ""),
 			DB:         getEnvAsInt("REDIS_DB", 0),
 			ProductTTL: 10 * time.Minute,
+		},
+		Kafka: KafkaConfig{
+			Brokers: brokers,
 		},
 	}
 }

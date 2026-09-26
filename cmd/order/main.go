@@ -14,8 +14,8 @@ import (
 	"github.com/Nuriklan/digital-commerce/internal/handler"
 	"github.com/Nuriklan/digital-commerce/internal/repository"
 	"github.com/Nuriklan/digital-commerce/internal/service"
-	"github.com/Nuriklan/digital-commerce/internal/worker"
 	"github.com/Nuriklan/digital-commerce/pkg/client"
+	"github.com/Nuriklan/digital-commerce/pkg/events"
 )
 
 func main() {
@@ -55,10 +55,14 @@ func main() {
 	}
 	defer catalogClient.Close()
 
-	// 4. Background workers
-	pool := worker.NewPool(cfg.Worker.Workers, cfg.Worker.QueueSize, worker.HandleOrderCreated)
-	pool.Start(ctx)
-	eventsPublisher := service.NewWorkerPoolEventPublisher(pool)
+	// 4. Kafka Event Producer
+	kafkaProducer := events.NewProducer(cfg.Kafka.Brokers, events.TopicOrderEvents)
+	defer func() {
+		if err := kafkaProducer.Close(); err != nil {
+			log.Printf("[Order Service] error closing kafka producer: %v", err)
+		}
+	}()
+	eventsPublisher := service.NewKafkaOrderPublisher(kafkaProducer)
 
 	// 5. Business logic
 	userSvc := service.NewUserService(userRepo)
@@ -92,7 +96,5 @@ func main() {
 		log.Printf("[Order Service] HTTP shutdown failed: %v", err)
 	}
 
-	log.Println("[Order Service] waiting for background workers...")
-	pool.Wait()
 	log.Println("[Order Service] stopped gracefully.")
 }
