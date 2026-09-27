@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/Nuriklan/digital-commerce/internal/domain"
 	"github.com/google/uuid"
@@ -231,4 +232,81 @@ func (r *IdempotencyMemoryRepository) Save(ctx context.Context, record domain.Id
 		r.records[record.Key] = record
 	}
 	return nil
+}
+
+// --- Outbox Memory Repository ---
+type OutboxMemoryRepository struct {
+	mu      sync.RWMutex
+	records map[uuid.UUID]domain.OutboxRecord
+}
+
+func NewOutboxMemoryRepository() *OutboxMemoryRepository {
+	return &OutboxMemoryRepository{
+		records: make(map[uuid.UUID]domain.OutboxRecord),
+	}
+}
+
+func (r *OutboxMemoryRepository) Save(ctx context.Context, record domain.OutboxRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records[record.ID] = record
+	return nil
+}
+
+func (r *OutboxMemoryRepository) FetchPending(ctx context.Context, batchSize int) ([]domain.OutboxRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var pending []domain.OutboxRecord
+	for _, rec := range r.records {
+		if rec.Status == domain.OutboxStatusPending {
+			pending = append(pending, rec)
+			if len(pending) >= batchSize {
+				break
+			}
+		}
+	}
+	return pending, nil
+}
+
+func (r *OutboxMemoryRepository) MarkPublished(ctx context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	rec, ok := r.records[id]
+	if !ok {
+		return ErrNotFound
+	}
+	now := time.Now().UTC()
+	rec.Status = domain.OutboxStatusPublished
+	rec.PublishedAt = &now
+	r.records[id] = rec
+	return nil
+}
+
+func (r *OutboxMemoryRepository) MarkFailed(ctx context.Context, id uuid.UUID, errMsg string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	rec, ok := r.records[id]
+	if !ok {
+		return ErrNotFound
+	}
+	rec.RetryCount++
+	rec.ErrorMessage = &errMsg
+	if rec.RetryCount >= 5 {
+		rec.Status = domain.OutboxStatusFailed
+	}
+	r.records[id] = rec
+	return nil
+}
+
+func (r *OutboxMemoryRepository) GetAll() []domain.OutboxRecord {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res := make([]domain.OutboxRecord, 0, len(r.records))
+	for _, rec := range r.records {
+		res = append(res, rec)
+	}
+	return res
 }

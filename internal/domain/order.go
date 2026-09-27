@@ -13,13 +13,14 @@ const (
 	OrderStatusPending   OrderStatus = "pending"
 	OrderStatusPaid      OrderStatus = "paid"
 	OrderStatusCancelled OrderStatus = "cancelled"
+	OrderStatusCompleted OrderStatus = "completed"
 )
 
 var (
-	ErrOrderAlreadyPaid      = errors.New("order is already paid")
-	ErrOrderAlreadyCancelled = errors.New("order is already cancelled")
-	ErrEmptyOrder            = errors.New("order has no items")
-	ErrItemNotFound          = errors.New("item not found in order")
+	ErrOrderAlreadyPaid       = errors.New("order is already paid")
+	ErrOrderAlreadyCancelled  = errors.New("order is already cancelled")
+	ErrEmptyOrder             = errors.New("order has no items")
+	ErrItemNotFound           = errors.New("item not found in order")
 	ErrOrderNotFound          = errors.New("order not found")
 	ErrOptimisticLockConflict = errors.New("optimistic lock conflict: order was updated concurrently")
 )
@@ -113,5 +114,13 @@ func (o *Order) Cancel() error {
 		return ErrOrderAlreadyCancelled
 	}
 	o.Status = OrderStatusCancelled
+	return nil
+}
+
+func (o *Order) Complete() error {
+	if o.Status == OrderStatusCancelled {
+		return ErrOrderAlreadyCancelled
+	}
+	o.Status = OrderStatusCompleted
 	return nil
 }

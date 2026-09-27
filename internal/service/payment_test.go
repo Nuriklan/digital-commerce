@@ -21,7 +21,7 @@ func setupPaymentTest() (*service.PaymentService, *service.OrderService, *reposi
 	idempotencyRepo := repository.NewIdempotencyMemoryRepository()
 	txManager := repository.NewMemoryTxManager()
 
-	orderSvc := service.NewOrderService(orderRepo, userRepo, productRepo, nil)
+	orderSvc := service.NewOrderService(orderRepo, userRepo, productRepo, txManager, nil)
 	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo, txManager, idempotencyRepo)
 
 	return paymentSvc, orderSvc, orderRepo, paymentRepo, idempotencyRepo

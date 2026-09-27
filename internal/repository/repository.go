@@ -44,3 +44,10 @@ type IdempotencyRepository interface {
 	Get(ctx context.Context, key string) (*domain.IdempotencyRecord, error)
 	Save(ctx context.Context, record domain.IdempotencyRecord) error
 }
+
+type OutboxRepository interface {
+	Save(ctx context.Context, record domain.OutboxRecord) error
+	FetchPending(ctx context.Context, batchSize int) ([]domain.OutboxRecord, error)
+	MarkPublished(ctx context.Context, id uuid.UUID) error
+	MarkFailed(ctx context.Context, id uuid.UUID, errMsg string) error
+}

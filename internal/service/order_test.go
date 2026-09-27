@@ -25,9 +25,10 @@ func TestOrderService_CreateOrder_Success(t *testing.T) {
 	userRepo := repository.NewUserMemoryRepository()
 	productRepo := repository.NewProductMemoryRepository()
 	orderRepo := repository.NewOrderMemoryRepository()
-	publisher := &mockPublisher{}
+	txManager := repository.NewMemoryTxManager()
+	outboxRepo := repository.NewOutboxMemoryRepository()
 
-	svc := service.NewOrderService(orderRepo, userRepo, productRepo, publisher)
+	svc := service.NewOrderService(orderRepo, userRepo, productRepo, txManager, outboxRepo)
 
 	user, _ := domain.NewUser("Alice", "alice@example.com")
 	product, _ := domain.NewProduct("Go in Action Book", 35.0)
@@ -63,11 +64,12 @@ func TestOrderService_CreateOrder_Success(t *testing.T) {
 		t.Errorf("expected saved order ID %s, got %s", order.ID, savedOrder.ID)
 	}
 
-	if len(publisher.publishedOrders) != 1 {
-		t.Fatalf("expected 1 published event, got %d", len(publisher.publishedOrders))
+	outboxRecords := outboxRepo.GetAll()
+	if len(outboxRecords) != 1 {
+		t.Fatalf("expected 1 outbox record, got %d", len(outboxRecords))
 	}
-	if publisher.publishedOrders[0].ID != order.ID {
-		t.Errorf("expected published order ID %s, got %s", order.ID, publisher.publishedOrders[0].ID)
+	if outboxRecords[0].AggregateID != order.ID {
+		t.Errorf("expected outbox aggregate ID %s, got %s", order.ID, outboxRecords[0].AggregateID)
 	}
 }
 
@@ -76,7 +78,7 @@ func TestOrderService_CreateOrder_UserNotFound(t *testing.T) {
 	productRepo := repository.NewProductMemoryRepository()
 	orderRepo := repository.NewOrderMemoryRepository()
 
-	svc := service.NewOrderService(orderRepo, userRepo, productRepo, nil)
+	svc := service.NewOrderService(orderRepo, userRepo, productRepo, nil, nil)
 
 	randomUserID := uuid.New()
 	_, err := svc.CreateOrder(context.Background(), randomUserID, nil)
@@ -95,7 +97,7 @@ func TestOrderService_CreateOrder_InvalidQuantity(t *testing.T) {
 	productRepo := repository.NewProductMemoryRepository()
 	orderRepo := repository.NewOrderMemoryRepository()
 
-	svc := service.NewOrderService(orderRepo, userRepo, productRepo, nil)
+	svc := service.NewOrderService(orderRepo, userRepo, productRepo, nil, nil)
 
 	user, _ := domain.NewUser("Alice", "alice@example.com")
 	_ = userRepo.Save(context.Background(), user)

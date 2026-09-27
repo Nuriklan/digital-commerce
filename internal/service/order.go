@@ -7,6 +7,7 @@ import (
 
 	"github.com/Nuriklan/digital-commerce/internal/domain"
 	"github.com/Nuriklan/digital-commerce/internal/repository"
+	"github.com/Nuriklan/digital-commerce/pkg/events"
 	"github.com/google/uuid"
 )
 
@@ -24,23 +25,26 @@ type ProductCatalog interface {
 }
 
 type OrderService struct {
-	orderRepo repository.OrderRepository
-	userRepo  repository.UserRepository
-	catalog   ProductCatalog
-	publisher OrderEventPublisher
+	orderRepo  repository.OrderRepository
+	userRepo   repository.UserRepository
+	catalog    ProductCatalog
+	txManager  repository.TxManager
+	outboxRepo repository.OutboxRepository
 }
 
 func NewOrderService(
 	orderRepo repository.OrderRepository,
 	userRepo repository.UserRepository,
 	catalog ProductCatalog,
-	publisher OrderEventPublisher,
+	txManager repository.TxManager,
+	outboxRepo repository.OutboxRepository,
 ) *OrderService {
 	return &OrderService{
-		orderRepo: orderRepo,
-		userRepo:  userRepo,
-		catalog:   catalog,
-		publisher: publisher,
+		orderRepo:  orderRepo,
+		userRepo:   userRepo,
+		catalog:    catalog,
+		txManager:  txManager,
+		outboxRepo: outboxRepo,
 	}
 }
 
@@ -64,12 +68,49 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID, items 
 		order.AddItem(product, item.Quantity)
 	}
 
-	if err := s.orderRepo.Save(ctx, order); err != nil {
-		return domain.Order{}, fmt.Errorf("failed to save order: %w", err)
+	// 1. Creating an OrderCreatedEvent for publication
+	eventItems := make([]events.OrderItemPayload, len(order.Items))
+	for i, it := range order.Items {
+		eventItems[i] = events.OrderItemPayload{
+			ProductID:   it.ProductID,
+			ProductName: it.Name,
+			Price:       it.Price,
+			Quantity:    it.Quantity,
+		}
 	}
 
-	if s.publisher != nil {
-		_ = s.publisher.PublishOrderCreated(ctx, order)
+	event := events.NewOrderCreatedEvent(order.ID, order.UserID, order.CalculateTotal(), eventItems)
+	payload, err := event.Marshal()
+	if err != nil {
+		return domain.Order{}, fmt.Errorf("failed to marshal order created event: %w", err)
+	}
+
+	// 2. Creating an Outbox record
+	outboxRecord := domain.NewOutboxRecord("order", order.ID, events.TopicOrderEvents, payload)
+
+	// 3. Atomically saving the Order and OutboxRecord within a single database transaction
+	saveFn := func(txCtx context.Context) error {
+		if err := s.orderRepo.Save(txCtx, order); err != nil {
+			return fmt.Errorf("failed to save order: %w", err)
+		}
+
+		if s.outboxRepo != nil {
+			if err := s.outboxRepo.Save(txCtx, outboxRecord); err != nil {
+				return fmt.Errorf("failed to save outbox record: %w", err)
+			}
+		}
+
+		return nil
+	}
+
+	if s.txManager != nil {
+		if err := s.txManager.WithinTransaction(ctx, saveFn); err != nil {
+			return domain.Order{}, err
+		}
+	} else {
+		if err := saveFn(ctx); err != nil {
+			return domain.Order{}, err
+		}
 	}
 
 	return order, nil

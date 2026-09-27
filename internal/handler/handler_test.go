@@ -33,7 +33,7 @@ func setupTestApp() *testContext {
 
 	userSvc := service.NewUserService(userRepo)
 	productSvc := service.NewProductService(productRepo)
-	orderSvc := service.NewOrderService(orderRepo, userRepo, productRepo, nil)
+	orderSvc := service.NewOrderService(orderRepo, userRepo, productRepo, txManager, nil)
 	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo, txManager, idempotencyRepo)
 
 	router := handler.NewRouter(userSvc, productSvc, orderSvc, paymentSvc)
