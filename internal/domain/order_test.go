@@ -8,20 +8,25 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestOrder_AddItemAndCalculateTotal(t *testing.T) {
-	userID := uuid.New()
-	order := domain.NewOrder(userID)
-
-	p1, err := domain.NewProduct("Go Book", 50.0)
+// mustCreateProduct is a test helper for creating a valid product.
+// Calling t.Helper() is crucial: if creation fails, Go will point to the line in the test
+// where mustCreateProduct was called, rather than the line inside the helper itself.
+func mustCreateProduct(t *testing.T, name string, price float64) domain.Product {
+	t.Helper()
+	p, err := domain.NewProduct(name, price)
 	if err != nil {
-		t.Fatalf("failed to create product: %v", err)
+		t.Fatalf("test helper mustCreateProduct failed: %v", err)
 	}
+	return p
+}
 
-	p2, err := domain.NewProduct("Sticker", 5.0)
-	if err != nil {
-		t.Fatalf("failed to create product: %v", err)
-	}
+// TestOrder_AddItemAndSubtotal verifies the addition of items and the aggregation of amounts.
+func TestOrder_AddItemAndSubtotal(t *testing.T) {
+	order := domain.NewOrder(uuid.New())
+	p1 := mustCreateProduct(t, "Go Book", 50.0)
+	p2 := mustCreateProduct(t, "Sticker", 5.0)
 
+	// Adding various products
 	order.AddItem(p1, 2)
 	order.AddItem(p2, 3)
 
@@ -30,50 +35,169 @@ func TestOrder_AddItemAndCalculateTotal(t *testing.T) {
 		t.Errorf("expected total %.2f, got %.2f", expectedTotal, total)
 	}
 
-	// Verifying the increase in the quantity of an existing product
+	// Adding the same item again should increase the quantity rather than creating duplicates
 	order.AddItem(p2, 2)
-	expectedTotal = 125.0
-	if total := order.CalculateTotal(); total != expectedTotal {
-		t.Errorf("expected total %.2f, got %.2f", expectedTotal, total)
+	if len(order.Items) != 2 {
+		t.Fatalf("expected 2 distinct items, got %d", len(order.Items))
 	}
 
-	// Delete the item
+	expectedTotal = 125.0
+	if total := order.CalculateTotal(); total != expectedTotal {
+		t.Errorf("expected total %.2f after quantity increment, got %.2f", expectedTotal, total)
+	}
+
+	// Deleting an existing product
 	if err := order.RemoveItem(p1.ID); err != nil {
 		t.Fatalf("unexpected error removing item: %v", err)
 	}
+	if len(order.Items) != 1 {
+		t.Fatalf("expected 1 item after removal, got %d", len(order.Items))
+	}
 
-	expectedTotal = 25.0
-	if total := order.CalculateTotal(); total != expectedTotal {
-		t.Errorf("expected total %.2f after removal, got %.2f", expectedTotal, total)
+	// Deleting a non-existent item should return domain.ErrItemNotFound
+	if err := order.RemoveItem(uuid.New()); !errors.Is(err, domain.ErrItemNotFound) {
+		t.Errorf("expected ErrItemNotFound, got %v", err)
 	}
 }
 
-func TestOrder_PayAndCancelTransitions(t *testing.T) {
-	t.Run("cannot pay empty order", func(t *testing.T) {
-		order := domain.NewOrder(uuid.New())
-		err := order.Pay()
-		if !errors.Is(err, domain.ErrEmptyOrder) {
-			t.Errorf("expected ErrEmptyOrder, got %v", err)
-		}
-	})
+// TestOrder_StatusTransitions uses the idiomatic table-driven test pattern
+// to verify the order status state machine.
+func TestOrder_StatusTransitions(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupOrder    func(t *testing.T) domain.Order
+		action        func(o *domain.Order) error
+		expectedError error
+		expectedState domain.OrderStatus
+	}{
+		{
+			name: "cannot pay empty order",
+			setupOrder: func(t *testing.T) domain.Order {
+				return domain.NewOrder(uuid.New())
+			},
+			action: func(o *domain.Order) error {
+				return o.Pay()
+			},
+			expectedError: domain.ErrEmptyOrder,
+			expectedState: domain.OrderStatusPending,
+		},
+		{
+			name: "successful payment of order with items",
+			setupOrder: func(t *testing.T) domain.Order {
+				o := domain.NewOrder(uuid.New())
+				p := mustCreateProduct(t, "Course", 100.0)
+				o.AddItem(p, 1)
+				return o
+			},
+			action: func(o *domain.Order) error {
+				return o.Pay()
+			},
+			expectedError: nil,
+			expectedState: domain.OrderStatusPaid,
+		},
+		{
+			name: "already paid order cannot be paid again",
+			setupOrder: func(t *testing.T) domain.Order {
+				o := domain.NewOrder(uuid.New())
+				p := mustCreateProduct(t, "Course", 100.0)
+				o.AddItem(p, 1)
+				_ = o.Pay()
+				return o
+			},
+			action: func(o *domain.Order) error {
+				return o.Pay()
+			},
+			expectedError: domain.ErrOrderAlreadyPaid,
+			expectedState: domain.OrderStatusPaid,
+		},
+		{
+			name: "already paid order cannot be cancelled directly",
+			setupOrder: func(t *testing.T) domain.Order {
+				o := domain.NewOrder(uuid.New())
+				p := mustCreateProduct(t, "Course", 100.0)
+				o.AddItem(p, 1)
+				_ = o.Pay()
+				return o
+			},
+			action: func(o *domain.Order) error {
+				return o.Cancel()
+			},
+			expectedError: domain.ErrOrderAlreadyPaid,
+			expectedState: domain.OrderStatusPaid,
+		},
+		{
+			name: "pending order can be cancelled",
+			setupOrder: func(t *testing.T) domain.Order {
+				return domain.NewOrder(uuid.New())
+			},
+			action: func(o *domain.Order) error {
+				return o.Cancel()
+			},
+			expectedError: nil,
+			expectedState: domain.OrderStatusCancelled,
+		},
+		{
+			name: "cancelled order cannot be paid",
+			setupOrder: func(t *testing.T) domain.Order {
+				o := domain.NewOrder(uuid.New())
+				_ = o.Cancel()
+				return o
+			},
+			action: func(o *domain.Order) error {
+				return o.Pay()
+			},
+			expectedError: domain.ErrOrderAlreadyCancelled,
+			expectedState: domain.OrderStatusCancelled,
+		},
+		{
+			name: "cancelled order cannot be completed",
+			setupOrder: func(t *testing.T) domain.Order {
+				o := domain.NewOrder(uuid.New())
+				_ = o.Cancel()
+				return o
+			},
+			action: func(o *domain.Order) error {
+				return o.Complete()
+			},
+			expectedError: domain.ErrOrderAlreadyCancelled,
+			expectedState: domain.OrderStatusCancelled,
+		},
+		{
+			name: "paid order can be completed",
+			setupOrder: func(t *testing.T) domain.Order {
+				o := domain.NewOrder(uuid.New())
+				p := mustCreateProduct(t, "License", 200.0)
+				o.AddItem(p, 1)
+				_ = o.Pay()
+				return o
+			},
+			action: func(o *domain.Order) error {
+				return o.Complete()
+			},
+			expectedError: nil,
+			expectedState: domain.OrderStatusCompleted,
+		},
+	}
 
-	t.Run("successful pay and cannot cancel paid order", func(t *testing.T) {
-		order := domain.NewOrder(uuid.New())
-		p, _ := domain.NewProduct("Course", 100.0)
-		order.AddItem(p, 1)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			order := tt.setupOrder(t)
 
-		if err := order.Pay(); err != nil {
-			t.Fatalf("expected order to be paid, got %v", err)
-		}
+			err := tt.action(&order)
 
-		if order.Status != domain.OrderStatusPaid {
-			t.Errorf("expected status %s, got %s", domain.OrderStatusPaid, order.Status)
-		}
+			// Checking the returned error
+			if tt.expectedError != nil {
+				if !errors.Is(err, tt.expectedError) {
+					t.Errorf("expected error %v, got %v", tt.expectedError, err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-		// Attempt to cancel a payment that has already been made
-		err := order.Cancel()
-		if !errors.Is(err, domain.ErrOrderAlreadyPaid) {
-			t.Errorf("expected ErrOrderAlreadyPaid, got %v", err)
-		}
-	})
+			// Verification of the correctness of the resulting status
+			if order.Status != tt.expectedState {
+				t.Errorf("expected status %s, got %s", tt.expectedState, order.Status)
+			}
+		})
+	}
 }

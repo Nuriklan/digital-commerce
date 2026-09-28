@@ -283,3 +283,102 @@ func TestPayment_IdempotencyAndTransactions(t *testing.T) {
 		t.Fatalf("expected 400 Bad Request when paying already paid order, got %d, body: %s", payRec3.Code, payRec3.Body.String())
 	}
 }
+
+func TestOrderHandler_CreateOrder_TableDriven(t *testing.T) {
+	app := setupTestApp()
+
+	user, _ := domain.NewUser("Eve", "eve@example.com")
+	product, _ := domain.NewProduct("Mechanical Keyboard", 120.0)
+	_ = app.userRepo.Save(context.Background(), user)
+	_ = app.productRepo.Save(context.Background(), product)
+
+	tests := []struct {
+		name         string
+		payload      string
+		expectedCode int
+	}{
+		{
+			name: "success: valid order created",
+			payload: `{
+				"user_id": "` + user.ID.String() + `",
+				"items": [{"product_id": "` + product.ID.String() + `", "quantity": 2}]
+			}`,
+			expectedCode: http.StatusCreated,
+		},
+		{
+			name: "failure: non-existent user returns 404",
+			payload: `{
+				"user_id": "` + uuid.New().String() + `",
+				"items": [{"product_id": "` + product.ID.String() + `", "quantity": 1}]
+			}`,
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name: "failure: invalid quantity returns 400",
+			payload: `{
+				"user_id": "` + user.ID.String() + `",
+				"items": [{"product_id": "` + product.ID.String() + `", "quantity": -5}]
+			}`,
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "failure: malformed JSON returns 400",
+			payload:      `{"user_id": "not-valid-json`,
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name: "failure: non-existent product returns 404",
+			payload: `{
+				"user_id": "` + user.ID.String() + `",
+				"items": [{"product_id": "` + uuid.New().String() + `", "quantity": 1}]
+			}`,
+			expectedCode: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/orders", bytes.NewBufferString(tt.payload))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			app.router.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedCode {
+				t.Errorf("expected status %d, got %d, body: %s", tt.expectedCode, rec.Code, rec.Body.String())
+			}
+
+			contentType := rec.Header().Get("Content-Type")
+			if contentType != "application/json" {
+				t.Errorf("expected Content-Type application/json, got %s", contentType)
+			}
+		})
+	}
+}
+
+func TestOrderHandler_GetOrder_Errors(t *testing.T) {
+	app := setupTestApp()
+
+	t.Run("invalid UUID format returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/orders/invalid-uuid-123", nil)
+		rec := httptest.NewRecorder()
+
+		app.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected status 400, got %d", rec.Code)
+		}
+	})
+
+	t.Run("non-existent order returns 404", func(t *testing.T) {
+		randomID := uuid.New().String()
+		req := httptest.NewRequest(http.MethodGet, "/orders/"+randomID, nil)
+		rec := httptest.NewRecorder()
+
+		app.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected status 404, got %d", rec.Code)
+		}
+	})
+}

@@ -192,3 +192,113 @@ func TestPostgres_IdempotencyRepository(t *testing.T) {
 		t.Errorf("expected status %v, got %v", expectedMap["status"], actualMap["status"])
 	}
 }
+
+func TestPostgres_OutboxRepository_Lifecycle(t *testing.T) {
+	db, _ := setupTestDB(t)
+	defer db.Close()
+
+	repo := repository.NewPostgresOutboxRepository(db)
+	ctx := context.Background()
+
+	// 1. Creating test Outbox-record
+	orderID := uuid.New()
+	payload := []byte(fmt.Sprintf(`{"order_id":"%s","total":150.00}`, orderID))
+	record := domain.NewOutboxRecord("order", orderID, "order.events", payload)
+
+	// Guaranteed cleanup of the record after test completion
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM outbox WHERE id = $1", record.ID)
+	})
+
+	// 2. Saving record in PostgreSQL
+	if err := repo.Save(ctx, record); err != nil {
+		t.Fatalf("failed to save outbox record: %v", err)
+	}
+
+	// 3. Select PENDING records by FetchPending
+	pending, err := repo.FetchPending(ctx, 10)
+	if err != nil {
+		t.Fatalf("failed to fetch pending outbox records: %v", err)
+	}
+
+	var foundRecord *domain.OutboxRecord
+	for _, r := range pending {
+		if r.ID == record.ID {
+			recCopy := r
+			foundRecord = &recCopy
+			break
+		}
+	}
+
+	if foundRecord == nil {
+		t.Fatalf("saved outbox record %s not found in pending list", record.ID)
+	}
+	if foundRecord.Status != domain.OutboxStatusPending {
+		t.Errorf("expected status %s, got %s", domain.OutboxStatusPending, foundRecord.Status)
+	}
+	var expectedPayload, actualPayload map[string]any
+	if err := json.Unmarshal(payload, &expectedPayload); err != nil {
+		t.Fatalf("failed to unmarshal expected payload: %v", err)
+	}
+	if err := json.Unmarshal(foundRecord.Payload, &actualPayload); err != nil {
+		t.Fatalf("failed to unmarshal actual payload: %v", err)
+	}
+	if expectedPayload["order_id"] != actualPayload["order_id"] {
+		t.Errorf("order_id mismatch: expected %v, got %v", expectedPayload["order_id"], actualPayload["order_id"])
+	}
+
+	// 4. Getting published record (MarkPublished)
+	if err := repo.MarkPublished(ctx, record.ID); err != nil {
+		t.Fatalf("failed to mark outbox record as published: %v", err)
+	}
+
+	// 5. Checking record not returning in FetchPending
+	pendingAfterPublish, err := repo.FetchPending(ctx, 10)
+	if err != nil {
+		t.Fatalf("failed to fetch pending records after publish: %v", err)
+	}
+
+	for _, r := range pendingAfterPublish {
+		if r.ID == record.ID {
+			t.Errorf("published record %s is still returned in pending list!", record.ID)
+		}
+	}
+
+	// 6. Verifying MarkFailed behavior and escalation to FAILED status upon exhaustion of retry_count.
+	failedRecord := domain.NewOutboxRecord("order", uuid.New(), "order.events", payload)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM outbox WHERE id = $1", failedRecord.ID)
+	})
+
+	if err := repo.Save(ctx, failedRecord); err != nil {
+		t.Fatalf("failed to save second outbox record: %v", err)
+	}
+
+	// Simulating 5 failed publication attempts
+	for attempt := 1; attempt <= 5; attempt++ {
+		errMsg := fmt.Sprintf("kafka broker unavailable (attempt %d)", attempt)
+		if err := repo.MarkFailed(ctx, failedRecord.ID, errMsg); err != nil {
+			t.Fatalf("attempt %d failed to MarkFailed: %v", attempt, err)
+		}
+	}
+
+	// After 5 attempts, the status in the database should become FAILED, and retry_count should be 5
+	var status string
+	var retryCount int
+	var lastErr string
+	err = db.QueryRowContext(
+		ctx,
+		"SELECT status, retry_count, error_message FROM outbox WHERE id = $1",
+		failedRecord.ID,
+	).Scan(&status, &retryCount, &lastErr)
+	if err != nil {
+		t.Fatalf("failed to query outbox record status: %v", err)
+	}
+
+	if status != "FAILED" {
+		t.Errorf("expected status 'FAILED' after 5 retries, got '%s'", status)
+	}
+	if retryCount != 5 {
+		t.Errorf("expected retry_count = 5, got %d", retryCount)
+	}
+}
