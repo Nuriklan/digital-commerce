@@ -1,0 +1,82 @@
+{
+    "annotations": {
+    "list": []
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 1,
+    "id": null,
+    "links": [],
+    "liveNow": false,
+    "panels": [
+    {
+        "title": "Throughput (RPS by Endpoint)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+        {
+            "expr": "sum(rate(digital_commerce_http_requests_total[1m])) by (method, path)",
+            "legendFormat": "{{method}} {{path}}"
+        }
+        ]
+    },
+    {
+        "title": "Error Rate (HTTP 5xx %)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [
+        {
+            "expr": "(sum(rate(digital_commerce_http_requests_total{status=~\"5..\"}[1m])) or vector(0)) /
+(sum(rate(digital_commerce_http_requests_total[1m])) or vector(1)) * 100",
+            "legendFormat": "5xx Error %"
+        }
+        ]
+    },
+    {
+        "title": "Latency p95 and p99 (Seconds)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "targets": [
+        {
+            "expr": "histogram_quantile(0.95, sum(rate(digital_commerce_http_request_duration_seconds_bucket[1m])) by (le))",
+            "legendFormat": "p95"
+        },
+        {
+            "expr": "histogram_quantile(0.99, sum(rate(digital_commerce_http_request_duration_seconds_bucket[1m])) by (le))",
+            "legendFormat": "p99"
+        }
+        ]
+    },
+    {
+        "title": "Business: Orders Created Total (rate)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+        "targets": [
+        {
+            "expr": "sum(rate(digital_commerce_order_created_total[1m]))",
+            "legendFormat": "Orders/sec"
+        }
+        ]
+    },
+    {
+        "title": "Business: Failed Payments by Reason",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+        "targets": [
+        {
+            "expr": "sum(rate(digital_commerce_payment_failed_total[1m])) by (reason)",
+            "legendFormat": "Failed: {{reason}}"
+        }
+        ]
+    }
+    ],
+    "refresh": "5s",
+    "schemaVersion": 38,
+    "tags": ["observability", "digital-commerce"],
+    "time": {
+    "from": "now-15m",
+    "to": "now"
+    },
+    "title": "Digital Commerce - Observability Overview",
+    "uid": "digital-commerce-obs"
+}

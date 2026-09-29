@@ -56,6 +56,35 @@ services:
         volumes:
             - kafkadata:/var/lib/kafka/data
 
+    prometheus:
+        image: prom/prometheus:v2.50.0
+        container_name: digital_commerce_prometheus
+        ports:
+            - "9090:9090"
+        volumes:
+            - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        command:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--web.enable-lifecycle"
+
+    grafana:
+        image: grafana/grafana:10.3.3
+        container_name: digital_commerce_grafana
+        ports:
+            - "3000:3000"
+        environment:
+            - GF_SECURITY_ADMIN_USER=admin
+            - GF_SECURITY_ADMIN_PASSWORD=admin
+            - GF_USERS_ALLOW_SIGN_UP=false
+        volumes:
+            - ./deployments/grafana/provisioning:/etc/grafana/provisioning
+            - ./deployments/grafana/dashboards:/var/lib/grafana/dashboards
+        depends_on:
+            - prometheus
+
 volumes:
     pgdata:
     redisdata:
