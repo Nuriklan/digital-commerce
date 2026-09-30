@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+  kind: Ingress
+  metadata:
+    name: commerce-ingress
+    namespace: digital-commerce
+    labels:
+      app.kubernetes.io/part-of: digital-commerce
+    annotations:
+      # Specify the target Ingress controller (NGINX)
+      nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+      # Basic CORS support for web clients
+      nginx.ingress.kubernetes.io/enable-cors: "true"
+      nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+      nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,
+Content-Type,Authorization,X-Request-ID"
+  spec:
+    ingressClassName: nginx
+    rules:
+      # If the domain api.commerce.local or direct access is requested
+      - host: api.commerce.local
+        http:
+          paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: gateway-service
+                  port:
+                    number: 8080
+      # Default rule (for access via node IP or localhost)
+      - http:
+          paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: gateway-service
+                  port:
+                    number: 8080
