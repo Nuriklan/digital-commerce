@@ -1,4 +1,7 @@
 services:
+    # ----------------------------------------------------
+    # Infrastructure: Storage, Broker, and Observability
+    # ----------------------------------------------------
     postgres:
         image: postgres:16-alpine
         container_name: digital_commerce_db
@@ -11,6 +14,8 @@ services:
         volumes:
             - pgdata:/var/lib/postgresql/data
             - ./migrations:/docker-entrypoint-initdb.d
+        networks:
+            - commerce_network
         healthcheck:
             test: ["CMD-SHELL", "pg_isready -U commerce_user -d digital_commerce"]
             interval: 5s
@@ -24,6 +29,8 @@ services:
             - "6379:6379"
         volumes:
             - redisdata:/data
+        networks:
+            - commerce_network
         healthcheck:
             test: ["CMD", "redis-cli", "ping"]
             interval: 5s
@@ -36,26 +43,147 @@ services:
         ports:
             - "9092:9092"
         environment:
-            # Unique identifier of the node in the cluster
             KAFKA_NODE_ID: 1
-            # The node acts as both a message broker and a Raft controller (standalone dev)
             KAFKA_PROCESS_ROLES: broker,controller
-            # Configuring ports and protocols for clients and the controller
-            KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+            # Two listeners: an internal one for the Docker network (29092) and an external one for the host (9092)
+            KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
             KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+            KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
             KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
-            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-            # Replication factor = 1 for a single local node
             KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
             KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
             KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
             KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-            # Automatic topic creation upon the first message sent
             KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
         volumes:
             - kafkadata:/var/lib/kafka/data
+        networks:
+            - commerce_network
+        healthcheck:
+            test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
 
+    # ----------------------------------------------------
+    # Go Platform Microservices
+    # ----------------------------------------------------
+    catalog:
+        build:
+            context: .
+            args:
+                SERVICE_NAME: catalog
+        container_name: digital_commerce_catalog
+        environment:
+            CATALOG_PORT: ":8081"
+            CATALOG_GRPC_PORT: ":50051"
+            DATABASE_URL: "postgres://commerce_user:commerce_password@postgres:5432/digital_commerce?sslmode=disable"
+            REDIS_ADDR: "redis:6379"
+        ports:
+            - "8081:8081"
+            - "50051:50051"
+        networks:
+            - commerce_network
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    order:
+        build:
+            context: .
+            args:
+                SERVICE_NAME: order
+        container_name: digital_commerce_order
+        environment:
+            ORDER_PORT: ":8082"
+            CATALOG_GRPC_ADDR: "catalog:50051"
+            DATABASE_URL: "postgres://commerce_user:commerce_password@postgres:5432/digital_commerce?sslmode=disable"
+            KAFKA_BROKERS: "kafka:29092"
+        ports:
+            - "8082:8082"
+        networks:
+            - commerce_network
+        depends_on:
+            postgres:
+                condition: service_healthy
+            catalog:
+                condition: service_healthy
+            kafka:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8082/health"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    gateway:
+        build:
+            context: .
+            args:
+                SERVICE_NAME: gateway
+        container_name: digital_commerce_gateway
+        environment:
+            GATEWAY_PORT: ":8080"
+            CATALOG_SERVICE_URL: "http://catalog:8081"
+            ORDER_SERVICE_URL: "http://order:8082"
+            REDIS_ADDR: "redis:6379"
+        ports:
+            - "8080:8080"
+        networks:
+            - commerce_network
+        depends_on:
+            catalog:
+                condition: service_healthy
+            order:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    notification:
+        build:
+            context: .
+            args:
+                SERVICE_NAME: notification
+        container_name: digital_commerce_notification
+        environment:
+            KAFKA_BROKERS: "kafka:29092"
+        networks:
+            - commerce_network
+        depends_on:
+            kafka:
+                condition: service_healthy
+
+    analytics:
+        build:
+            context: .
+            args:
+                SERVICE_NAME: analytics
+        container_name: digital_commerce_analytics
+        environment:
+            KAFKA_BROKERS: "kafka:29092"
+        networks:
+            - commerce_network
+        depends_on:
+            kafka:
+                condition: service_healthy
+
+    # ----------------------------------------------------
+    # Monitoring and visualization
+    # ----------------------------------------------------
     prometheus:
         image: prom/prometheus:v2.50.0
         container_name: digital_commerce_prometheus
@@ -63,12 +191,15 @@ services:
             - "9090:9090"
         volumes:
             - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-        extra_hosts:
-            - "host.docker.internal:host-gateway"
+        networks:
+            - commerce_network
         command:
             - "--config.file=/etc/prometheus/prometheus.yml"
             - "--storage.tsdb.path=/prometheus"
             - "--web.enable-lifecycle"
+        depends_on:
+            - gateway
+            - order
 
     grafana:
         image: grafana/grafana:10.3.3
@@ -82,6 +213,8 @@ services:
         volumes:
             - ./deployments/grafana/provisioning:/etc/grafana/provisioning
             - ./deployments/grafana/dashboards:/var/lib/grafana/dashboards
+        networks:
+            - commerce_network
         depends_on:
             - prometheus
 
@@ -89,3 +222,7 @@ volumes:
     pgdata:
     redisdata:
     kafkadata:
+
+networks:
+    commerce_network:
+        driver: bridge

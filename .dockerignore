@@ -1,0 +1,35 @@
+# Git and repositories
+.git
+.gitignore
+
+# Local compiled binaries and artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Temporary files and cache
+tmp/
+*.tmp
+*.log
+
+# IDE and Editor Settings
+.idea/
+.vscode/
+*.swp
+*~
+
+# Environment files and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Documentation and text files (not required for Go compilation)
+*.md
+LICENSE
+
+# Deployment files (not needed inside the Go builder)
+deployments/
