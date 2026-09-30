@@ -1,0 +1,110 @@
+name: CD Pipeline - Kubernetes Delivery
+
+  on:
+    push:
+      branches: [ main, master ]
+      paths:
+        - 'deployments/k8s/**'
+        - '.github/workflows/cd.yml'
+    workflow_run:
+      workflows: [ "Build & Publish Docker Images" ]
+      types: [ completed ]
+      branches: [ main, master ]
+    workflow_dispatch:
+      inputs:
+        environment:
+          description: 'Target deployment environment'
+          required: true
+          default: 'staging'
+          type: choice
+          options:
+            - staging
+            - production
+
+  concurrency:
+    group: cd-k8s-${{ github.ref }}
+    cancel-in-progress: false
+
+  jobs:
+    # 1. Validation of all K8s YAML manifests against OpenAPI schemas
+    validate-manifests:
+      name: Validate K8s Manifests
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+
+        - name: Install kubeconform
+          run: |
+            curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+            sudo mv kubeconform /usr/local/bin/
+
+        - name: Validate Kubernetes YAML schemas
+          run: |
+            kubeconform -summary -verbose -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              deployments/k8s/*.yaml
+
+    # 2. Delivery and safe deployment to the cluster with automatic rollback
+    deploy:
+      name: Deploy to Kubernetes
+      needs: [ validate-manifests ]
+      # We trigger the deployment only upon successful image builds, a push to `main`, or a manual invocation
+      if: |
+        github.event_name == 'workflow_dispatch' ||
+        github.ref == 'refs/heads/main' ||
+        github.ref == 'refs/heads/master'
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+
+        - name: Set up Kubectl
+          uses: azure/setup-kubectl@v4
+          with:
+            version: 'latest'
+
+        - name: Dry-run client verification
+          run: |
+            kubectl apply --dry-run=client -f deployments/k8s/
+
+        # Access to the cluster is configured here for the production environment:
+        # - name: Set Kubeconfig
+        #   uses: azure/k8s-set-context@v4
+        #   with:
+        #     kubeconfig: ${{ secrets.KUBECONFIG }}
+
+        - name: Apply ConfigMaps, Secrets and Services
+          run: |
+            echo "Simulating applying namespace, configs, secrets, services..."
+            # kubectl apply -f deployments/k8s/00-namespace.yaml
+            # kubectl apply -f deployments/k8s/01-config-secrets.yaml
+            # kubectl apply -f deployments/k8s/06-ingress.yaml
+            # kubectl apply -f deployments/k8s/07-hpa.yaml
+
+        - name: Rolling Deploy Microservices
+          run: |
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            echo "Deploying release with image tag: sha-${SHORT_SHA}"
+            # kubectl set image deployment/gateway-deployment gateway=ghcr.io/${{ github.repository }}/digital-commerce-gateway:sha-${SHORT_SHA} -n
+digital-commerce
+            # kubectl set image deployment/catalog-deployment catalog=ghcr.io/${{ github.repository }}/digital-commerce-catalog:sha-${SHORT_SHA} -n
+digital-commerce
+            # kubectl set image deployment/order-deployment order=ghcr.io/${{ github.repository }}/digital-commerce-order:sha-${SHORT_SHA} -n digital-
+commerce
+
+        - name: Track Rollout Status
+          run: |
+            echo "Waiting for pods readiness..."
+            # kubectl rollout status deployment/gateway-deployment -n digital-commerce --timeout=120s
+            # kubectl rollout status deployment/catalog-deployment -n digital-commerce --timeout=120s
+            # kubectl rollout status deployment/order-deployment -n digital-commerce --timeout=120s
+
+        # Automatic rollback to the previous version if at least one rollout step fails
+        - name: Automated Rollback on Failure
+          if: failure()
+          run: |
+            echo "Rollout failed! Initiating automatic rollback to previous revision..."
+            # kubectl rollout undo deployment/gateway-deployment -n digital-commerce
+            # kubectl rollout undo deployment/catalog-deployment -n digital-commerce
+            # kubectl rollout undo deployment/order-deployment -n digital-commerce

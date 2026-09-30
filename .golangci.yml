@@ -1,0 +1,88 @@
+run:
+    timeout: 5m
+    tests: true
+    # Exclude directories containing generated code and binaries
+    skip-dirs:
+      - bin
+      - vendor
+    skip-files:
+      - ".*\\.pb\\.go$"
+      - ".*\\.pb\\.gw\\.go$"
+
+  # Configuration of specific linters
+  linters-settings:
+    govet:
+      # Enable shadowing checks
+      check-shadowing: true
+      enable-all: true
+      disable:
+        - fieldalignment # Disable strict field alignment checking in structures
+
+    errcheck:
+      # Check error handling even for empty interfaces and type assertions
+      check-type-assertions: true
+      check-blank: true
+      # Exceptions for standard functions whose errors may be ignored (e.g., ResponseWriter.Write in HTTP)
+      exclude-functions:
+        - (*net/http.ResponseWriter).Write
+        - (net/http.ResponseWriter).Write
+        - (*go.uber.org/zap.SugaredLogger).Sync
+        - (*go.uber.org/zap.Logger).Sync
+
+    revive:
+      # Idiomatic Go naming rules (replacing the deprecated golint)
+      severity: warning
+      confidence: 0.8
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+
+    gocritic:
+      # Analyzer of architectural pattern performance and purity
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam # Disable for large DTO structures if they are intentionally passed by value
+
+  # List of active linters
+  linters:
+    disable-all: true
+    enable:
+      - govet        # Official Go analyzer (copylocks, printf formats, unreachable code)
+      - errcheck     # Checking for unhandled errors
+      - staticcheck  # Deep semantic analysis (bugs, outdated APIs, infinite loops)
+      - unused       # Searching for unused constants, variables, types, and functions
+      - gosimple     # Proposals for simplifying the syntax
+      - ineffassign  # Detection of inefficient redundant variable assignments
+      - revive       # A fast and customizable alternative to golint
+      - gocritic     # Checking idiomaticity and micro-optimizations
+      - misspell     # Checking for spelling errors in comments and identifiers
+
+  # Exception rules for specific file categories
+  issues:
+    exclude-use-default: false
+    max-issues-per-linter: 0
+    max-same-issues: 0
+    exclude-rules:
+      # In the tests, we allow skipping certain checks for the sake of readability
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+          - govet
