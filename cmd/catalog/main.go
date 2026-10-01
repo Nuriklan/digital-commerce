@@ -18,6 +18,7 @@ import (
 	"github.com/Nuriklan/digital-commerce/internal/middleware"
 	"github.com/Nuriklan/digital-commerce/internal/repository"
 	"github.com/Nuriklan/digital-commerce/internal/service"
+	"github.com/Nuriklan/digital-commerce/pkg/auth"
 	catalogpb "github.com/Nuriklan/digital-commerce/proto/catalog"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
@@ -67,8 +68,14 @@ func main() {
 	// 4. Service and HTTP-handlers
 	productSvc := service.NewProductService(productRepo)
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "digital-commerce-secret-key-change-in-prod"
+	}
+	jwtMgr := auth.NewJWTManager(jwtSecret, 24*time.Hour)
+
 	// 5. HTTP Server (REST API)
-	router := handler.NewCatalogRouter(productSvc)
+	router := handler.NewCatalogRouter(productSvc, jwtMgr)
 	httpServer := &http.Server{
 		Addr:         httpPort,
 		Handler:      router,

@@ -105,13 +105,16 @@ func NewUserPostgresRepository(db *sql.DB) *UserPostgresRepository {
 func (r *UserPostgresRepository) Save(ctx context.Context, user domain.User) error {
 	exec := getExecutor(ctx, r.db)
 	query := `
-		INSERT INTO users (id, name, email, created_at)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO users (id, name, email, password_hash, role, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (id) DO UPDATE
-		SET name = EXCLUDED.name, email = EXCLUDED.email;
+		SET name = EXCLUDED.name,
+			email = EXCLUDED.email,
+			password_hash = EXCLUDED.password_hash,
+			role = EXCLUDED.role;
 	`
 
-	_, err := exec.ExecContext(ctx, query, user.ID, user.Name, user.Email, user.CreatedAt)
+	_, err := exec.ExecContext(ctx, query, user.ID, user.Name, user.Email, user.PasswordHash, string(user.Role), user.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save user: %w", err)
 	}
@@ -120,16 +123,35 @@ func (r *UserPostgresRepository) Save(ctx context.Context, user domain.User) err
 
 func (r *UserPostgresRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.User, error) {
 	exec := getExecutor(ctx, r.db)
-	query := `SELECT id, name, email, created_at FROM users WHERE id = $1`
+	query := `SELECT id, name, email, password_hash, role, created_at FROM users WHERE id = $1`
 	var u domain.User
+	var roleStr string
 
-	err := exec.QueryRowContext(ctx, query, id).Scan(&u.ID, &u.Name, &u.Email, &u.CreatedAt)
+	err := exec.QueryRowContext(ctx, query, id).Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &roleStr, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.User{}, ErrNotFound
 		}
 		return domain.User{}, fmt.Errorf("failed to get user: %w", err)
 	}
+	u.Role = domain.Role(roleStr)
+	return u, nil
+}
+
+func (r *UserPostgresRepository) GetByEmail(ctx context.Context, email string) (domain.User, error) {
+	exec := getExecutor(ctx, r.db)
+	query := `SELECT id, name, email, password_hash, role, created_at FROM users WHERE email = $1`
+	var u domain.User
+	var roleStr string
+
+	err := exec.QueryRowContext(ctx, query, email).Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &roleStr, &u.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.User{}, ErrNotFound
+		}
+		return domain.User{}, fmt.Errorf("failed to get user by email: %w", err)
+	}
+	u.Role = domain.Role(roleStr)
 	return u, nil
 }
 

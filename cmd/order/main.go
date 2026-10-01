@@ -15,6 +15,7 @@ import (
 	"github.com/Nuriklan/digital-commerce/internal/repository"
 	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/Nuriklan/digital-commerce/internal/worker"
+	"github.com/Nuriklan/digital-commerce/pkg/auth"
 	"github.com/Nuriklan/digital-commerce/pkg/client"
 	"github.com/Nuriklan/digital-commerce/pkg/events"
 )
@@ -69,11 +70,18 @@ func main() {
 	go outboxWorker.Start(ctx)
 
 	// 5. Business logic
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "digital-commerce-secret-key-change-in-prod"
+	}
+	jwtMgr := auth.NewJWTManager(jwtSecret, 24*time.Hour)
+
 	userSvc := service.NewUserService(userRepo)
+	authSvc := service.NewAuthService(userRepo, jwtMgr)
 	orderSvc := service.NewOrderService(orderRepo, userRepo, catalogClient, txManager, outboxRepo)
 	paymentSvc := service.NewPaymentService(paymentRepo, orderRepo, txManager, idempotencyRepo)
 
-	router := handler.NewOrderRouter(userSvc, orderSvc, paymentSvc)
+	router := handler.NewOrderRouter(userSvc, orderSvc, paymentSvc, authSvc, jwtMgr)
 
 	server := &http.Server{
 		Addr:         port,

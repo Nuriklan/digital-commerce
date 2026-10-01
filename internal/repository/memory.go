@@ -55,6 +55,17 @@ func (r *UserMemoryRepository) GetByID(ctx context.Context, id uuid.UUID) (domai
 	return user, nil
 }
 
+func (r *UserMemoryRepository) GetByEmail(ctx context.Context, email string) (domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, user := range r.users {
+		if user.Email == email {
+			return user, nil
+		}
+	}
+	return domain.User{}, ErrNotFound
+}
+
 // --- Product Memory Repository ---
 
 type ProductMemoryRepository struct {

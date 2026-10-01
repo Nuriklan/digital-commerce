@@ -77,6 +77,8 @@ func main() {
 	mux.Handle("/payments/", orderProxy)
 	mux.Handle("/users", orderProxy)
 	mux.Handle("/users/", orderProxy)
+	mux.Handle("/auth", orderProxy)
+	mux.Handle("/auth/", orderProxy)
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +96,7 @@ func main() {
 	handlerChain := middleware.Chain(
 		mux,
 		middleware.RequestID,
+		middleware.CORS,
 		middleware.RedisLimit(rateLimiter),
 		middleware.Logger,
 		middleware.Recoverer,

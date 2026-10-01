@@ -20,6 +20,7 @@ type TxManager interface {
 type UserRepository interface {
 	Save(ctx context.Context, user domain.User) error
 	GetByID(ctx context.Context, id uuid.UUID) (domain.User, error)
+	GetByEmail(ctx context.Context, email string) (domain.User, error)
 }
 
 type ProductRepository interface {

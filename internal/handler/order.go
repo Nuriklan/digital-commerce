@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Nuriklan/digital-commerce/internal/middleware"
 	"github.com/Nuriklan/digital-commerce/internal/repository"
 	"github.com/Nuriklan/digital-commerce/internal/service"
 	"github.com/google/uuid"
@@ -34,6 +35,11 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := req.UserID
+	if authUserID, ok := middleware.GetUserID(r.Context()); ok {
+		userID = authUserID
+	}
+
 	items := make([]service.CreateOrderItemDTO, len(req.Items))
 	for i, item := range req.Items {
 		items[i] = service.CreateOrderItemDTO{
@@ -42,7 +48,7 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	order, err := h.service.CreateOrder(r.Context(), req.UserID, items)
+	order, err := h.service.CreateOrder(r.Context(), userID, items)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			respondError(w, http.StatusNotFound, err.Error())
