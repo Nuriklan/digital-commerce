@@ -49,9 +49,13 @@ func main() {
 
 	// 2. Redis
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
+		Addr:            cfg.Redis.Addr,
+		Password:        cfg.Redis.Password,
+		DB:              cfg.Redis.DB,
+		PoolSize:        50,
+		MinIdleConns:    10,
+		ConnMaxIdleTime: 5 * time.Minute,
+		ConnMaxLifetime: 30 * time.Minute,
 	})
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		log.Fatalf("[Catalog Service] failed to connect to Redis: %v", err)

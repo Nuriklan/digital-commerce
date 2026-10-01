@@ -1,11 +1,19 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"sync"
 )
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		return bytes.NewBuffer(make([]byte, 0, 4096))
+	},
+}
 
 type ErrorResponse struct {
 	Error   string `json:"error"`
@@ -14,10 +22,23 @@ type ErrorResponse struct {
 
 func respondJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if data != nil {
-		_ = json.NewEncoder(w).Encode(data)
+
+	if data == nil {
+		w.WriteHeader(status)
+		return
 	}
+
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufferPool.Put(buf)
+
+	if err := json.NewEncoder(buf).Encode(data); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(status)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func respondError(w http.ResponseWriter, status int, message string, details ...string) {

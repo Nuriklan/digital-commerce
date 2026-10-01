@@ -32,6 +32,7 @@ type DatabaseConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
 }
 
 type RedisConfig struct {
@@ -65,6 +66,7 @@ func Load() *Config {
 			MaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
 			MaxIdleConns:    getEnvAsInt("DB_MAX_IDLE_CONNS", 10),
 			ConnMaxLifetime: 15 * time.Minute,
+			ConnMaxIdleTime: 5 * time.Minute,
 		},
 		Redis: RedisConfig{
 			Addr:       getEnv("REDIS_ADDR", "localhost:6379"),

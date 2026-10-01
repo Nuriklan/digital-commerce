@@ -100,21 +100,29 @@ func (r *ProductMemoryRepository) List(ctx context.Context, limit, offset int) (
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	all := make([]domain.Product, 0, len(r.products))
-	for _, p := range r.products {
-		all = append(all, p)
-	}
-
-	if offset >= len(all) {
+	total := len(r.products)
+	if offset >= total {
 		return []domain.Product{}, nil
 	}
 
-	end := offset + limit
-	if end > len(all) {
-		end = len(all)
+	capacity := limit
+	if offset+limit > total {
+		capacity = total - offset
+	}
+	result := make([]domain.Product, 0, capacity)
+
+	idx := 0
+	for _, p := range r.products {
+		if idx >= offset && len(result) < limit {
+			result = append(result, p)
+		}
+		idx++
+		if len(result) == limit {
+			break
+		}
 	}
 
-	return all[offset:end], nil
+	return result, nil
 }
 
 // --- Order Memory Repository ---

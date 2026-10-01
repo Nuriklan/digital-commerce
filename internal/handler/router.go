@@ -13,6 +13,8 @@ func NewCatalogRouter(productSvc *service.ProductService, jwtMgr *auth.JWTManage
 	mux := http.NewServeMux()
 	productH := NewProductHandler(productSvc)
 
+	RegisterPprof(mux)
+
 	if jwtMgr != nil {
 		createProductHandler := middleware.Chain(
 			http.HandlerFunc(productH.CreateProduct),
