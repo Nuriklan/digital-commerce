@@ -1,1 +1,47 @@
-bin
+# Compiled binaries and build artifacts
+bin/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Profiling and diagnostics (pprof & trace)
+*.pprof
+*.prof
+*.trace
+cpu.pprof
+mem.pprof
+profile.pprof
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temporary directories
+*.log
+tmp/
+scratch/
